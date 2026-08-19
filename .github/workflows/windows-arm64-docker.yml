@@ -143,8 +143,47 @@ jobs:
         if: matrix.vs-buildtools
         shell: pwsh
         run: |
-          & .\docker-bin\docker.exe run --rm python-arm64 cmd /c "where cl && cl 2>&1 | findstr ARM64 && python -VV"
+          & .\docker-bin\docker.exe run --rm python-arm64 cmd /c "where cl && cl 2>&1 | findstr ARM64"
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
+
+      - name: Test package installs
+        shell: pwsh
+        run: |
+          ./scripts/Test-PackageInstalls.ps1 `
+            -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.vs-buildtools && '_vs' || '' }}' `
+            -Image python-arm64 `
+            -DockerExe .\docker-bin\docker.exe `
+            -ListPath data\list.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-py${{ matrix.python-version }}${{ matrix.vs-buildtools && '-vs' || '' }}
+          path: results-*.csv
 
       - name: Stop dockerd
         cancel: dockerd
+
+  consolidate-results:
+    runs-on: ubuntu-latest
+    needs: python-image-build
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Download result CSVs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+          merge-multiple: true
+
+      - name: Consolidate CSVs
+        run: python scripts/consolidate_results.py --input results --output consolidated.csv
+
+      - name: Upload consolidated CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-results
+          path: consolidated.csv
