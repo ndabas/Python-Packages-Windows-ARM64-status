@@ -14,6 +14,13 @@ jobs:
   docker-smoke-test:
     runs-on: windows-11-arm
     steps:
+      - name: Show optional Windows features
+        shell: pwsh
+        run: |
+          Get-WindowsOptionalFeature -Online |
+            Sort-Object FeatureName |
+            Format-Table FeatureName, State -AutoSize | Out-String -Width 200
+
       - name: Resolve moby commit
         id: moby
         shell: pwsh
