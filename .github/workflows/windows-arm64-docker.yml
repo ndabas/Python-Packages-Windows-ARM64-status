@@ -57,25 +57,23 @@ jobs:
           Copy-Item bundles\dockerd.exe, bundles\docker.exe ..\docker-bin\
 
       - name: Start dockerd in background
+        id: dockerd
+        background: true
         shell: pwsh
         run: |
-          $bin = Join-Path $PWD 'docker-bin'
-          Start-Process -FilePath (Join-Path $bin 'dockerd.exe') `
-            -ArgumentList '--exec-opt', 'isolation=hyperv' `
-            -RedirectStandardOutput dockerd-out.log `
-            -RedirectStandardError dockerd-err.log
-          # Wait for the daemon to accept connections
+          & .\docker-bin\dockerd.exe --exec-opt isolation=hyperv
+
+      - name: Wait for dockerd to be ready
+        shell: pwsh
+        run: |
           $deadline = (Get-Date).AddMinutes(3)
           while ($true) {
-            & (Join-Path $bin 'docker.exe') version *> $null
+            & .\docker-bin\docker.exe version *> $null
             if ($LASTEXITCODE -eq 0) { break }
-            if ((Get-Date) -gt $deadline) {
-              Get-Content dockerd-out.log, dockerd-err.log -ErrorAction SilentlyContinue
-              throw 'dockerd did not become ready in time'
-            }
+            if ((Get-Date) -gt $deadline) { throw 'dockerd did not become ready in time' }
             Start-Sleep -Seconds 5
           }
-          & (Join-Path $bin 'docker.exe') version
+          & .\docker-bin\docker.exe version
 
       - name: Run smoke test container
         shell: pwsh
@@ -84,7 +82,5 @@ jobs:
             powershell -Command "Write-Host 'Hello from inside the container'; Write-Host ('Architecture: ' + `$env:PROCESSOR_ARCHITECTURE); [System.Environment]::OSVersion.VersionString"
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
 
-      - name: Show dockerd logs on failure
-        if: failure()
-        shell: pwsh
-        run: Get-Content dockerd-out.log, dockerd-err.log -ErrorAction SilentlyContinue
+      - name: Stop dockerd
+        cancel: dockerd
