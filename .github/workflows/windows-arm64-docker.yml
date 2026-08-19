@@ -2,7 +2,7 @@ name: Windows ARM64 Docker smoke test
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
@@ -33,7 +33,9 @@ jobs:
       - name: Clone moby
         if: steps.cache-docker.outputs.cache-hit != 'true'
         shell: pwsh
-        run: git clone --depth 1 --branch $env:MOBY_REF $env:MOBY_REPO moby
+        run: |
+          git config --global core.longpaths true
+          git clone --depth 1 --branch $env:MOBY_REF $env:MOBY_REPO moby
 
       - name: Set up Go
         if: steps.cache-docker.outputs.cache-hit != 'true'
