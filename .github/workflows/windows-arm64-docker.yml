@@ -56,7 +56,7 @@ jobs:
           cd moby
           ./hack/make.ps1 -Client -Daemon
           New-Item -ItemType Directory -Force -Path ..\docker-bin | Out-Null
-          Copy-Item *.exe ..\docker-bin\
+          Copy-Item bundles\*.exe ..\docker-bin\
 
       - name: Start dockerd in background
         id: dockerd
