@@ -29,30 +29,40 @@ $packages = Get-Content $ListPath |
     ForEach-Object { $_.Trim() } |
     Where-Object { $_ -and -not $_.StartsWith('#') }
 
-$rows = foreach ($pkg in $packages) {
-    if ($env:GITHUB_ACTIONS) { Write-Host "::group::pip install $pkg" }
-    else { Write-Host "===== pip install $pkg =====" }
+# Mounted into the container to receive pip's install report
+$reportDir = Join-Path ([IO.Path]::GetTempPath()) "pip-reports-$PID"
+New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+$reportPath = Join-Path $reportDir 'report.json'
 
-    # The install report contains the resolved download URL for the requested package
-    $cmd = "python -m pip install --report C:\report.json $pkg; " +
-           "if (`$LASTEXITCODE -eq 0) { " +
-           "`$r = Get-Content C:\report.json -Raw | ConvertFrom-Json; " +
-           "`$u = (`$r.install | Where-Object { `$_.requested } | ForEach-Object { `$_.download_info.url }) -join ' '; " +
-           "Write-Output ('RESULT::success::' + `$u) } " +
-           "else { Write-Output 'RESULT::failure::' }"
-    $output = & $DockerExe run --rm $Image powershell -NoProfile -Command $cmd
-    $output | Write-Host
+try {
+    $rows = foreach ($pkg in $packages) {
+        if ($env:GITHUB_ACTIONS) { Write-Host "::group::pip install $pkg" }
+        else { Write-Host "===== pip install $pkg =====" }
 
-    if ($env:GITHUB_ACTIONS) { Write-Host '::endgroup::' }
+        Remove-Item $reportPath -ErrorAction SilentlyContinue
+        & $DockerExe run --rm -v "${reportDir}:C:\out" $Image `
+            python -m pip install --report C:\out\report.json $pkg
 
-    $result = ($output | Where-Object { $_ -match '^RESULT::' } | Select-Object -Last 1) -replace '^RESULT::', ''
-    if (-not $result) { $result = 'failure::' }
-    $status, $url = $result -split '::', 2
-    [pscustomobject]@{
-        package                          = $pkg
-        "${ColumnPrefix}_install_status" = $status
-        "${ColumnPrefix}_binary_url"     = $url
+        if ($env:GITHUB_ACTIONS) { Write-Host '::endgroup::' }
+
+        $status = 'failure'
+        $url = ''
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $reportPath)) {
+            $status = 'success'
+            $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+            $url = ($report.install |
+                Where-Object { $_.requested } |
+                ForEach-Object { $_.download_info.url }) -join ' '
+        }
+        [pscustomobject]@{
+            package                          = $pkg
+            "${ColumnPrefix}_install_status" = $status
+            "${ColumnPrefix}_binary_url"     = $url
+        }
     }
+}
+finally {
+    Remove-Item $reportDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $rows | Export-Csv -Path $OutputPath -NoTypeInformation
