@@ -61,7 +61,7 @@ jobs:
         background: true
         shell: pwsh
         run: |
-          & .\docker-bin\dockerd.exe --exec-opt isolation=hyperv
+          & .\docker-bin\dockerd.exe --exec-opt isolation=process
 
       - name: Wait for dockerd to be ready
         shell: pwsh
