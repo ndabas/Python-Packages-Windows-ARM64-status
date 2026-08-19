@@ -39,7 +39,7 @@ jobs:
 
       - name: Set up Go
         if: steps.cache-docker.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: moby/go.mod
           cache: false
@@ -49,7 +49,8 @@ jobs:
         shell: pwsh
         run: |
           go install github.com/tc-hib/go-winres@latest
-          $env:Path += ";$(go env GOPATH)\bin"
+          $env:GOPATH = go env GOPATH
+          $env:Path += ";$env:GOPATH\bin"
           cd moby
           ./hack/make.ps1 -Client -Daemon
           New-Item -ItemType Directory -Force -Path ..\docker-bin | Out-Null
