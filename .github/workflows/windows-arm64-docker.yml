@@ -1,0 +1,87 @@
+name: Windows ARM64 Docker smoke test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  MOBY_REPO: https://github.com/moby/moby.git
+  MOBY_REF: master
+
+jobs:
+  docker-smoke-test:
+    runs-on: windows-11-arm
+    steps:
+      - name: Resolve moby commit
+        id: moby
+        shell: pwsh
+        run: |
+          $sha = (git ls-remote $env:MOBY_REPO $env:MOBY_REF | Select-Object -First 1).Split()[0]
+          if (-not $sha) { throw "Could not resolve $env:MOBY_REF in $env:MOBY_REPO" }
+          Write-Host "moby commit: $sha"
+          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Cache Docker binaries
+        id: cache-docker
+        uses: actions/cache@v4
+        with:
+          path: docker-bin
+          key: docker-windows-arm64-${{ steps.moby.outputs.sha }}
+
+      - name: Clone moby
+        if: steps.cache-docker.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: git clone --depth 1 --branch $env:MOBY_REF $env:MOBY_REPO moby
+
+      - name: Set up Go
+        if: steps.cache-docker.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: moby/go.mod
+          cache: false
+
+      - name: Build Docker client and daemon
+        if: steps.cache-docker.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          go install github.com/tc-hib/go-winres@latest
+          $env:Path += ";$(go env GOPATH)\bin"
+          cd moby
+          ./hack/make.ps1 -Client -Daemon
+          New-Item -ItemType Directory -Force -Path ..\docker-bin | Out-Null
+          Copy-Item bundles\dockerd.exe, bundles\docker.exe ..\docker-bin\
+
+      - name: Start dockerd in background
+        shell: pwsh
+        run: |
+          $bin = Join-Path $PWD 'docker-bin'
+          Start-Process -FilePath (Join-Path $bin 'dockerd.exe') `
+            -ArgumentList '--exec-opt', 'isolation=hyperv' `
+            -RedirectStandardOutput dockerd-out.log `
+            -RedirectStandardError dockerd-err.log
+          # Wait for the daemon to accept connections
+          $deadline = (Get-Date).AddMinutes(3)
+          while ($true) {
+            & (Join-Path $bin 'docker.exe') version *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((Get-Date) -gt $deadline) {
+              Get-Content dockerd-out.log, dockerd-err.log -ErrorAction SilentlyContinue
+              throw 'dockerd did not become ready in time'
+            }
+            Start-Sleep -Seconds 5
+          }
+          & (Join-Path $bin 'docker.exe') version
+
+      - name: Run smoke test container
+        shell: pwsh
+        run: |
+          & .\docker-bin\docker.exe run --rm mcr.microsoft.com/windows/servercore:ltsc2025-arm64 `
+            powershell -Command "Write-Host 'Hello from inside the container'; Write-Host ('Architecture: ' + `$env:PROCESSOR_ARCHITECTURE); [System.Environment]::OSVersion.VersionString"
+          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
+
+      - name: Show dockerd logs on failure
+        if: failure()
+        shell: pwsh
+        run: Get-Content dockerd-out.log, dockerd-err.log -ErrorAction SilentlyContinue
