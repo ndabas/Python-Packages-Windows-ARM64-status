@@ -13,6 +13,8 @@ env:
 jobs:
   docker-smoke-test:
     runs-on: windows-11-arm
+    outputs:
+      moby-sha: ${{ steps.moby.outputs.sha }}
     steps:
       - name: Resolve moby commit
         id: moby
@@ -54,7 +56,7 @@ jobs:
           cd moby
           ./hack/make.ps1 -Client -Daemon
           New-Item -ItemType Directory -Force -Path ..\docker-bin | Out-Null
-          Copy-Item bundles\dockerd.exe, bundles\docker.exe ..\docker-bin\
+          Copy-Item *.exe ..\docker-bin\
 
       - name: Start dockerd in background
         id: dockerd
@@ -80,6 +82,68 @@ jobs:
         run: |
           & .\docker-bin\docker.exe run --rm mcr.microsoft.com/windows/servercore:ltsc2025-arm64 `
             powershell -Command "Write-Host 'Hello from inside the container'; Write-Host ('Architecture: ' + `$env:PROCESSOR_ARCHITECTURE); [System.Environment]::OSVersion.VersionString"
+          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
+
+      - name: Stop dockerd
+        cancel: dockerd
+
+  python-image-build:
+    runs-on: windows-11-arm
+    needs: docker-smoke-test
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13', '3.14', '3.15']
+        vs-buildtools: [false, true]
+    name: python-image-build (${{ matrix.python-version }}${{ matrix.vs-buildtools && ', vs' || '' }})
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Restore Docker binaries
+        uses: actions/cache/restore@v4
+        with:
+          path: docker-bin
+          key: docker-windows-arm64-${{ needs.docker-smoke-test.outputs.moby-sha }}
+          fail-on-cache-miss: true
+
+      - name: Start dockerd in background
+        id: dockerd
+        background: true
+        shell: pwsh
+        run: |
+          & .\docker-bin\dockerd.exe --exec-opt isolation=process
+
+      - name: Wait for dockerd to be ready
+        shell: pwsh
+        run: |
+          $deadline = (Get-Date).AddMinutes(3)
+          while ($true) {
+            & .\docker-bin\docker.exe version *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((Get-Date) -gt $deadline) { throw 'dockerd did not become ready in time' }
+            Start-Sleep -Seconds 5
+          }
+
+      - name: Build Python image
+        shell: pwsh
+        run: |
+          & .\docker-bin\docker.exe build -t python-arm64 `
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} `
+            --build-arg INSTALL_VS_BUILDTOOLS=${{ matrix.vs-buildtools }} .
+          if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
+
+      - name: Smoke test Python image
+        shell: pwsh
+        run: |
+          & .\docker-bin\docker.exe run --rm python-arm64 python -VV
+          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
+
+      - name: Smoke test VS Build Tools
+        if: matrix.vs-buildtools
+        shell: pwsh
+        run: |
+          & .\docker-bin\docker.exe run --rm python-arm64 cmd /c "where cl && cl 2>&1 | findstr ARM64 && python -VV"
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
 
       - name: Stop dockerd
