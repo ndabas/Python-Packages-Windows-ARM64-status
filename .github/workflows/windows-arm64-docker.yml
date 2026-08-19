@@ -27,7 +27,7 @@ jobs:
 
       - name: Cache Docker binaries
         id: cache-docker
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: docker-bin
           key: docker-windows-arm64-${{ steps.moby.outputs.sha }}
@@ -98,10 +98,10 @@ jobs:
     name: python-image-build (${{ matrix.python-version }}${{ matrix.vs-buildtools && ', vs' || '' }})
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Restore Docker binaries
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: docker-bin
           key: docker-windows-arm64-${{ needs.docker-smoke-test.outputs.moby-sha }}

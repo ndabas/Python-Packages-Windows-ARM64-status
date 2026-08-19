@@ -18,7 +18,7 @@ ENV PYTHON_MANAGER_DEFAULT=${PYTHON_VERSION} `
 
 RUN py install $env:PYTHON_VERSION; `
     py list; `
-    [Environment]::SetEnvironmentVariable('PATH', "$env:LocalAppData\Python\bin;" + [Environment]::GetEnvironmentVariable('PATH', 'Machine'), 'Machine')
+    setx /M PATH \"$env:LocalAppData\Python\bin;$env:PATH\"
 
 RUN python -VV; python -m pip --version
 
