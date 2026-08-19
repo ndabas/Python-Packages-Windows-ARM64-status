@@ -13,10 +13,10 @@ RUN Invoke-WebRequest -Uri "https://www.python.org/ftp/python/pymanager/python-m
     if ($p.ExitCode -ne 0) { throw "Python install manager MSI failed with exit code $($p.ExitCode)" }; `
     Remove-Item C:\pymanager.msi
 
-ENV PYTHON_MANAGER_DEFAULT=${PYTHON_VERSION} `
+ENV PYTHON_MANAGER_DEFAULT=${PYTHON_VERSION}-arm64 `
     PYTHON_MANAGER_CONFIRM=no
 
-RUN py install $env:PYTHON_VERSION; `
+RUN py install "$env:PYTHON_VERSION-arm64"; `
     py list; `
     setx /M PATH \"$env:LocalAppData\Python\bin;$env:PATH\"
 
