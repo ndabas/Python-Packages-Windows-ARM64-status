@@ -8,6 +8,8 @@ ARG PYTHON_VERSION=3.14
 ARG PYMANAGER_VERSION=26.3
 ARG INSTALL_VS_BUILDTOOLS=false
 
+RUN New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -PropertyType DWORD -Force
+
 RUN Invoke-WebRequest -Uri "https://www.python.org/ftp/python/pymanager/python-manager-$env:PYMANAGER_VERSION.msi" -OutFile C:\pymanager.msi; `
     $p = Start-Process msiexec.exe -ArgumentList '/i', 'C:\pymanager.msi', '/quiet', '/norestart' -Wait -PassThru; `
     if ($p.ExitCode -ne 0) { throw "Python install manager MSI failed with exit code $($p.ExitCode)" }; `
