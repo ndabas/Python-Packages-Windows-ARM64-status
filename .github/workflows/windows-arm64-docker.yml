@@ -12,7 +12,7 @@ env:
 
 jobs:
   docker-smoke-test:
-    runs-on: windows-11-arm
+    runs-on: windows-11-vs2026-arm
     steps:
       - name: Show optional Windows features
         shell: pwsh
@@ -68,7 +68,7 @@ jobs:
         background: true
         shell: pwsh
         run: |
-          & .\docker-bin\dockerd.exe --exec-opt isolation=process
+          & .\docker-bin\dockerd.exe --exec-opt isolation=hyperv
 
       - name: Wait for dockerd to be ready
         shell: pwsh
