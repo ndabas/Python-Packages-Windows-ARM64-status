@@ -253,11 +253,17 @@ jobs:
           path: results
           merge-multiple: true
 
+      - name: Download package lists
+        uses: actions/download-artifact@v4
+        with:
+          name: package-lists
+          path: data
+
       - name: Consolidate CSVs
-        run: python scripts/consolidate_results.py --input results --output consolidated.csv
+        run: python scripts/consolidate_results.py --input results
 
       - name: Upload consolidated CSV
         uses: actions/upload-artifact@v4
         with:
           name: consolidated-results
-          path: consolidated.csv
+          path: data/win_arm64-status-*.csv
