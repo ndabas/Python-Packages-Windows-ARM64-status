@@ -102,14 +102,15 @@ def classify(package: str) -> dict[str, str]:
         if len(parts) < 2:
             continue
         abi_tag, platform_tag = parts[-2], parts[-1]
-
-        if abi_tag == "none":
-            platform_independent = True
         # A wheel filename may carry several dot-separated platform tags.
-        if TARGET_PLATFORM in platform_tag.split("."):
-            arm64_wheels.append(item["filename"])
-        if platform_tag != "any":
+        platform_tags = platform_tag.split(".")
+
+        if abi_tag == "none" and "any" in platform_tags:
+            platform_independent = True
+        else:
             platform_specific = True
+        if TARGET_PLATFORM in platform_tags:
+            arm64_wheels.append(item["filename"])
 
     has_arm64 = bool(arm64_wheels)
     row["platform_independent"] = str(platform_independent).lower()
@@ -154,7 +155,7 @@ def main() -> None:
         status = row["error"] or (
             f"{TARGET_PLATFORM}" if row[f"has_{TARGET_PLATFORM}"] == "true"
             else "pure-python" if row["platform_independent"] == "true"
-            else "needs build"
+            else "needs-wheel"
         )
         print(f"[{index}/{len(packages)}] {package}: {status}", flush=True)
 
