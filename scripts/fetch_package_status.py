@@ -21,7 +21,7 @@ TARGET_PLATFORM = "win_arm64"
 
 
 def load_env(path: str) -> dict[str, str]:
-    """Parse a simple KEY=VALUE .env file; real environment variables win."""
+    """Parse a simple KEY=VALUE .env file."""
     values: dict[str, str] = {}
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
@@ -31,7 +31,6 @@ def load_env(path: str) -> dict[str, str]:
                     continue
                 key, _, value = line.partition("=")
                 values[key.strip()] = value.strip().strip("'\"")
-    values.update({k: v for k, v in os.environ.items() if k in values})
     return values
 
 
@@ -134,12 +133,16 @@ def main() -> None:
     args = parser.parse_args()
 
     env = load_env(args.env)
-    try:
-        sheet_url = env["GOOGLE_SHEET_URL"]
-        sheet_name = env["GOOGLE_SHEET_NAME"]
-        column = env["GOOGLE_SHEET_COL_PACKAGE_NAME"]
-    except KeyError as exc:
-        raise SystemExit(f"Missing {exc.args[0]} in {args.env}") from exc
+
+    def setting(name: str) -> str:
+        value = os.environ.get(name) or env.get(name)
+        if not value:
+            raise SystemExit(f"Set {name} in the environment or in {args.env}")
+        return value
+
+    sheet_url = setting("GOOGLE_SHEET_URL")
+    sheet_name = setting("GOOGLE_SHEET_NAME")
+    column = setting("GOOGLE_SHEET_COL_PACKAGE_NAME")
 
     packages = read_packages(sheet_url, sheet_name, column)
     print(f"Read {len(packages)} packages from sheet {sheet_name!r}")
@@ -170,7 +173,7 @@ def main() -> None:
     buildable = [r["package"] for r in rows if r["package"] not in set(testable)]
 
     test_path = os.path.join(args.output_dir, f"test-{TARGET_PLATFORM}.txt")
-    build_path = os.path.join(args.output_dir, f"test-{TARGET_PLATFORM}-build.txt")
+    build_path = os.path.join(args.output_dir, f"test-{TARGET_PLATFORM}-buildtools.txt")
     for path, names in ((test_path, testable), (build_path, buildable)):
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("".join(f"{name}\n" for name in names))

@@ -113,9 +113,28 @@ jobs:
         if: steps.check-docker.outputs.preinstalled != 'true'
         cancel: dockerd
 
+  fetch-package-lists:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Generate package lists from the Google Sheet
+        env:
+          GOOGLE_SHEET_URL: ${{ vars.GOOGLE_SHEET_URL }}
+          GOOGLE_SHEET_NAME: ${{ vars.GOOGLE_SHEET_NAME }}
+          GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ vars.GOOGLE_SHEET_COL_PACKAGE_NAME }}
+        run: python scripts/fetch_package_status.py
+
+      - name: Upload package lists
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lists
+          path: data/
+
   test-package-installs:
     runs-on: windows-11-arm
-    needs: build-docker
+    needs: [build-docker, fetch-package-lists]
     strategy:
       fail-fast: false
       matrix:
@@ -125,6 +144,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Download package lists
+        uses: actions/download-artifact@v4
+        with:
+          name: package-lists
+          path: data
 
       - name: Check for an existing Docker on PATH
         id: check-docker
@@ -201,7 +226,7 @@ jobs:
           ./scripts/Test-PackageInstalls.ps1 `
             -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.buildtools && '_vs' || '' }}' `
             -Image python-arm64 `
-            -ListPath data\list.txt
+            -ListPath data\test-win_arm64${{ matrix.buildtools && '-buildtools' || '' }}.txt
 
       - name: Upload results
         uses: actions/upload-artifact@v4
