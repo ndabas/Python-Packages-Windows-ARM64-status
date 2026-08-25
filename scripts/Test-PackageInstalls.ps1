@@ -24,6 +24,10 @@ param(
     # Fail instead of falling back to a source build; for images without build tools
     [switch]$OnlyBinary,
 
+    # Stop starting new installs after this many hours (0 = no limit). Defaults to 4
+    # under Actions so results are still written before the 6 hour job timeout.
+    [double]$TimeLimitHours = $(if ($env:GITHUB_ACTIONS) { 4 } else { 0 }),
+
     [string]$OutputPath
 )
 
@@ -32,12 +36,14 @@ if (-not $OutputPath) { $OutputPath = "results-$ColumnPrefix.csv" }
 if (-not $CacheDir) { $CacheDir = Join-Path ([IO.Path]::GetTempPath()) "pip-cache-$ColumnPrefix" }
 New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
 
+$deadline = if ($TimeLimitHours -gt 0) { (Get-Date).AddHours($TimeLimitHours) } else { [datetime]::MaxValue }
+
 $pipArgs = @('install', '--no-warn-script-location', '--report', 'C:\out\report.json')
 if ($OnlyBinary) { $pipArgs += '--only-binary=:all:' }
 
-$packages = Get-Content $ListPath |
-ForEach-Object { $_.Trim() } |
-Where-Object { $_ -and -not $_.StartsWith('#') }
+$packages = @(Get-Content $ListPath |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -and -not $_.StartsWith('#') })
 
 # Mounted into the container to receive pip's install report
 $reportDir = Join-Path ([IO.Path]::GetTempPath()) "pip-reports-$PID"
@@ -45,7 +51,14 @@ New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 $reportPath = Join-Path $reportDir 'report.json'
 
 try {
+    $done = 0
     $rows = foreach ($pkg in $packages) {
+        if ((Get-Date) -gt $deadline) {
+            Write-Warning "Time limit of $TimeLimitHours h reached; skipping $($packages.Count - $done) remaining packages."
+            break
+        }
+        $done++
+
         if ($env:GITHUB_ACTIONS) { Write-Host "::group::pip install $pkg" }
         else { Write-Host "===== pip install $pkg =====" }
 
@@ -77,4 +90,4 @@ finally {
 }
 
 $rows | Export-Csv -Path $OutputPath -NoTypeInformation
-Write-Host "Wrote $OutputPath"
+Write-Host "Wrote $OutputPath ($done of $($packages.Count) packages)"
