@@ -123,9 +123,9 @@ jobs:
 
       - name: Generate package lists from the Google Sheet
         env:
-          GOOGLE_SHEET_URL: ${{ vars.GOOGLE_SHEET_URL }}
-          GOOGLE_SHEET_NAME: ${{ vars.GOOGLE_SHEET_NAME }}
-          GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ vars.GOOGLE_SHEET_COL_PACKAGE_NAME }}
+          GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
+          GOOGLE_SHEET_NAME: ${{ secrets.GOOGLE_SHEET_NAME }}
+          GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ secrets.GOOGLE_SHEET_COL_PACKAGE_NAME }}
         run: python scripts/fetch_package_status.py
 
       - name: Upload package lists
