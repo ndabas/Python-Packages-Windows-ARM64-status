@@ -84,11 +84,14 @@ jobs:
 
       - name: Start dockerd in background
         id: dockerd
-        if: steps.check-docker.outputs.preinstalled != 'true'
         background: true
         shell: pwsh
         run: |
-          dockerd --exec-opt isolation=process
+          if ('${{ steps.check-docker.outputs.preinstalled }}' -eq 'true') {
+            Write-Host 'Using the pre-installed docker; not starting dockerd'
+          } else {
+            dockerd --exec-opt isolation=process
+          }
 
       - name: Wait for dockerd to be ready
         shell: pwsh
@@ -110,7 +113,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
 
       - name: Stop dockerd
-        if: steps.check-docker.outputs.preinstalled != 'true'
         cancel: dockerd
 
   fetch-package-lists:
@@ -182,11 +184,14 @@ jobs:
 
       - name: Start dockerd in background
         id: dockerd
-        if: steps.check-docker.outputs.preinstalled != 'true'
         background: true
         shell: pwsh
         run: |
-          dockerd --exec-opt isolation=process
+          if ('${{ steps.check-docker.outputs.preinstalled }}' -eq 'true') {
+            Write-Host 'Using the pre-installed docker; not starting dockerd'
+          } else {
+            dockerd --exec-opt isolation=process
+          }
 
       - name: Wait for dockerd to be ready
         shell: pwsh
@@ -235,7 +240,6 @@ jobs:
           path: results-*.csv
 
       - name: Stop dockerd
-        if: steps.check-docker.outputs.preinstalled != 'true'
         cancel: dockerd
 
   consolidate-results:
