@@ -63,6 +63,7 @@ try {
 }
 finally {
     Remove-Item $reportDir -Recurse -Force -ErrorAction SilentlyContinue
+    $global:LASTEXITCODE = 0
 }
 
 $rows | Export-Csv -Path $OutputPath -NoTypeInformation
