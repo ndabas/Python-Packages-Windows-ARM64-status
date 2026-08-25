@@ -142,7 +142,7 @@ jobs:
       matrix:
         python-version: ['3.13', '3.14', '3.15']
         buildtools: [false, true]
-    name: test-package-installs (${{ matrix.python-version }}${{ matrix.buildtools && ', vs' || '' }})
+    name: test-package-installs (${{ matrix.python-version }}${{ matrix.buildtools && ', buildtools' || '' }})
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -229,14 +229,14 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/Test-PackageInstalls.ps1 `
-            -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.buildtools && '_vs' || '' }}' `
+            -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.buildtools && '_buildtools' || '' }}' `
             -Image python-arm64 `
             -ListPath data\test-win_arm64${{ matrix.buildtools && '-buildtools' || '' }}.txt ${{ !matrix.buildtools && '-OnlyBinary' || '' }}
 
       - name: Upload results
         uses: actions/upload-artifact@v7
         with:
-          name: results-py${{ matrix.python-version }}${{ matrix.buildtools && '-vs' || '' }}
+          name: results-py${{ matrix.python-version }}${{ matrix.buildtools && '-buildtools' || '' }}
           path: results-*.csv
 
       - name: Stop dockerd

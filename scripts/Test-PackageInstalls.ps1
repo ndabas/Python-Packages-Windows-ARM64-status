@@ -8,7 +8,7 @@ and write the results to a CSV file.
 #>
 [CmdletBinding()]
 param(
-    # Column prefix for the CSV, e.g. 'py3.14' or 'py3.14_vs'
+    # Column prefix for the CSV, e.g. 'py3.14' or 'py3.14_buildtools'
     [Parameter(Mandatory)]
     [string]$ColumnPrefix,
 
