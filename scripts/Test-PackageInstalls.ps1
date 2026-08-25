@@ -21,6 +21,9 @@ param(
     # wheels built for one image variant are never reused by another.
     [string]$CacheDir,
 
+    # Fail instead of falling back to a source build; for images without build tools
+    [switch]$OnlyBinary,
+
     [string]$OutputPath
 )
 
@@ -28,6 +31,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $OutputPath) { $OutputPath = "results-$ColumnPrefix.csv" }
 if (-not $CacheDir) { $CacheDir = Join-Path ([IO.Path]::GetTempPath()) "pip-cache-$ColumnPrefix" }
 New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
+
+$pipArgs = @('install', '--report', 'C:\out\report.json')
+if ($OnlyBinary) { $pipArgs += '--only-binary=:all:' }
 
 $packages = Get-Content $ListPath |
 ForEach-Object { $_.Trim() } |
@@ -45,7 +51,7 @@ try {
 
         Remove-Item $reportPath -ErrorAction SilentlyContinue
         docker run --rm -v "${reportDir}:C:\out" -v "${CacheDir}:C:\pip-cache" $Image `
-            python -m pip install --report C:\out\report.json $pkg
+            python -m pip @pipArgs $pkg
 
         if ($env:GITHUB_ACTIONS) { Write-Host '::endgroup::' }
 

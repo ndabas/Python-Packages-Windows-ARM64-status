@@ -226,7 +226,7 @@ jobs:
           ./scripts/Test-PackageInstalls.ps1 `
             -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.buildtools && '_vs' || '' }}' `
             -Image python-arm64 `
-            -ListPath data\test-win_arm64${{ matrix.buildtools && '-buildtools' || '' }}.txt
+            -ListPath data\test-win_arm64${{ matrix.buildtools && '-buildtools' || '' }}.txt ${{ !matrix.buildtools && '-OnlyBinary' || '' }}
 
       - name: Upload results
         uses: actions/upload-artifact@v4
