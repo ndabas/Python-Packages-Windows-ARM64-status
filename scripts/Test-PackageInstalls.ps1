@@ -12,12 +12,10 @@ param(
     [Parameter(Mandatory)]
     [string]$ColumnPrefix,
 
+    [Parameter(Mandatory)]
+    [string]$ListPath,
+
     [string]$Image = 'python-arm64',
-
-    # Path to the docker CLI
-    [string]$DockerExe = 'docker',
-
-    [string]$ListPath = "$PSScriptRoot/../data/list.txt",
 
     [string]$OutputPath
 )
@@ -26,8 +24,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $OutputPath) { $OutputPath = "results-$ColumnPrefix.csv" }
 
 $packages = Get-Content $ListPath |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -and -not $_.StartsWith('#') }
+ForEach-Object { $_.Trim() } |
+Where-Object { $_ -and -not $_.StartsWith('#') }
 
 # Mounted into the container to receive pip's install report
 $reportDir = Join-Path ([IO.Path]::GetTempPath()) "pip-reports-$PID"
@@ -40,7 +38,7 @@ try {
         else { Write-Host "===== pip install $pkg =====" }
 
         Remove-Item $reportPath -ErrorAction SilentlyContinue
-        & $DockerExe run --rm -v "${reportDir}:C:\out" $Image `
+        docker run --rm -v "${reportDir}:C:\out" $Image `
             python -m pip install --report C:\out\report.json $pkg
 
         if ($env:GITHUB_ACTIONS) { Write-Host '::endgroup::' }
