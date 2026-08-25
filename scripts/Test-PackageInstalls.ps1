@@ -32,7 +32,7 @@ if (-not $OutputPath) { $OutputPath = "results-$ColumnPrefix.csv" }
 if (-not $CacheDir) { $CacheDir = Join-Path ([IO.Path]::GetTempPath()) "pip-cache-$ColumnPrefix" }
 New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
 
-$pipArgs = @('install', '--report', 'C:\out\report.json')
+$pipArgs = @('install', '--no-warn-script-location', '--report', 'C:\out\report.json')
 if ($OnlyBinary) { $pipArgs += '--only-binary=:all:' }
 
 $packages = Get-Content $ListPath |
