@@ -120,8 +120,8 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.13', '3.14', '3.15']
-        vs-buildtools: [false, true]
-    name: test-package-installs (${{ matrix.python-version }}${{ matrix.vs-buildtools && ', vs' || '' }})
+        buildtools: [false, true]
+    name: test-package-installs (${{ matrix.python-version }}${{ matrix.buildtools && ', vs' || '' }})
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -179,7 +179,7 @@ jobs:
         run: |
           docker build -t python-arm64 `
             --build-arg PYTHON_VERSION=${{ matrix.python-version }} `
-            --build-arg INSTALL_VS_BUILDTOOLS=${{ matrix.vs-buildtools }} .
+            --build-arg INSTALL_BUILDTOOLS=${{ matrix.buildtools }} .
           if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 
       - name: Smoke test Python image
@@ -188,8 +188,8 @@ jobs:
           docker run --rm python-arm64 python -VV
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
 
-      - name: Smoke test VS Build Tools
-        if: matrix.vs-buildtools
+      - name: Smoke test Build Tools
+        if: matrix.buildtools
         shell: pwsh
         run: |
           docker run --rm python-arm64 cmd /c "where cl && cl 2>&1 | findstr ARM64"
@@ -199,14 +199,14 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/Test-PackageInstalls.ps1 `
-            -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.vs-buildtools && '_vs' || '' }}' `
+            -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.buildtools && '_vs' || '' }}' `
             -Image python-arm64 `
             -ListPath data\list.txt
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: results-py${{ matrix.python-version }}${{ matrix.vs-buildtools && '-vs' || '' }}
+          name: results-py${{ matrix.python-version }}${{ matrix.buildtools && '-vs' || '' }}
           path: results-*.csv
 
       - name: Stop dockerd

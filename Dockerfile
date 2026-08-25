@@ -6,7 +6,7 @@ SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPref
 
 ARG PYTHON_VERSION=3.14
 ARG PYMANAGER_VERSION=26.3
-ARG INSTALL_VS_BUILDTOOLS=false
+ARG INSTALL_BUILDTOOLS=false
 
 RUN New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -PropertyType DWORD -Force
 
@@ -25,7 +25,7 @@ RUN py install \"$env:PYTHON_VERSION-arm64\"; `
 
 RUN python -VV; python -m pip --version
 
-RUN if ($env:INSTALL_VS_BUILDTOOLS -eq 'true') { `
+RUN if ($env:INSTALL_BUILDTOOLS -eq 'true') { `
       Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\vs_buildtools.exe; `
       $p = Start-Process C:\vs_buildtools.exe -ArgumentList `
         '--quiet', '--wait', '--norestart', '--nocache', `
@@ -34,9 +34,9 @@ RUN if ($env:INSTALL_VS_BUILDTOOLS -eq 'true') { `
         '--add', 'Microsoft.VisualStudio.Component.VC.Tools.ARM64', `
         '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.22621' `
         -Wait -PassThru; `
-      if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw \"VS Build Tools install failed with exit code $($p.ExitCode)\" }; `
+      if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw \"Build Tools install failed with exit code $($p.ExitCode)\" }; `
       Remove-Item C:\vs_buildtools.exe `
-    } else { Write-Host 'Skipping VS Build Tools install' }
+    } else { Write-Host 'Skipping Build Tools install' }
 
 RUN $lines = @( `
       '@echo off', `
