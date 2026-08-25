@@ -17,11 +17,17 @@ param(
 
     [string]$Image = 'python-arm64',
 
+    # Host directory mounted as pip's cache. Keyed on the column prefix so that
+    # wheels built for one image variant are never reused by another.
+    [string]$CacheDir,
+
     [string]$OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
 if (-not $OutputPath) { $OutputPath = "results-$ColumnPrefix.csv" }
+if (-not $CacheDir) { $CacheDir = Join-Path ([IO.Path]::GetTempPath()) "pip-cache-$ColumnPrefix" }
+New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
 
 $packages = Get-Content $ListPath |
 ForEach-Object { $_.Trim() } |
@@ -38,7 +44,7 @@ try {
         else { Write-Host "===== pip install $pkg =====" }
 
         Remove-Item $reportPath -ErrorAction SilentlyContinue
-        docker run --rm -v "${reportDir}:C:\out" $Image `
+        docker run --rm -v "${reportDir}:C:\out" -v "${CacheDir}:C:\pip-cache" $Image `
             python -m pip install --report C:\out\report.json $pkg
 
         if ($env:GITHUB_ACTIONS) { Write-Host '::endgroup::' }

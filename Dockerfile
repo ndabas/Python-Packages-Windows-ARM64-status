@@ -17,7 +17,8 @@ RUN Invoke-WebRequest -Uri \"https://www.python.org/ftp/python/pymanager/python-
 
 ENV PYTHON_MANAGER_DEFAULT=${PYTHON_VERSION}-arm64 `
     PYTHON_MANAGER_CONFIRM=no `
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 `
+    PIP_CACHE_DIR=C:\pip-cache
 
 RUN py install \"$env:PYTHON_VERSION-arm64\"; `
     py list; `
