@@ -18,7 +18,9 @@ RUN Invoke-WebRequest -Uri \"https://www.python.org/ftp/python/pymanager/python-
 ENV PYTHON_MANAGER_DEFAULT=${PYTHON_VERSION}-arm64 `
     PYTHON_MANAGER_CONFIRM=no `
     PIP_DISABLE_PIP_VERSION_CHECK=1 `
-    PIP_CACHE_DIR=C:\pip-cache
+    PIP_CACHE_DIR=C:\pip-cache `
+    CARGO_HOME=C:\cargo `
+    RUSTUP_HOME=C:\rustup
 
 RUN py install \"$env:PYTHON_VERSION-arm64\"; `
     py list; `
@@ -38,6 +40,17 @@ RUN if ($env:INSTALL_BUILDTOOLS -eq 'true') { `
       if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw \"Build Tools install failed with exit code $($p.ExitCode)\" }; `
       Remove-Item C:\vs_buildtools.exe `
     } else { Write-Host 'Skipping Build Tools install' }
+
+RUN if ($env:INSTALL_BUILDTOOLS -eq 'true') { `
+      Invoke-WebRequest -Uri 'https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe' -OutFile C:\rustup-init.exe; `
+      $p = Start-Process C:\rustup-init.exe -ArgumentList `
+        '-y', '--no-modify-path', '--profile', 'minimal', '--default-toolchain', 'stable' `
+        -Wait -PassThru; `
+      if ($p.ExitCode -ne 0) { throw \"rustup install failed with exit code $($p.ExitCode)\" }; `
+      Remove-Item C:\rustup-init.exe; `
+      setx /M PATH \"$env:CARGO_HOME\bin;$env:PATH\"; `
+      & \"$env:CARGO_HOME\bin\rustc.exe\" -Vv `
+    } else { Write-Host 'Skipping Rust install' }
 
 RUN $lines = @( `
       '@echo off', `
