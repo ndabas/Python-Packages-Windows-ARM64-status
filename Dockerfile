@@ -52,12 +52,7 @@ RUN if ($env:INSTALL_BUILDTOOLS -eq 'true') { `
       & \"$env:CARGO_HOME\bin\rustc.exe\" -Vv `
     } else { Write-Host 'Skipping Rust install' }
 
-RUN $lines = @( `
-      '@echo off', `
-      'if exist \"C:\BuildTools\Common7\Tools\VsDevCmd.bat\" call \"C:\BuildTools\Common7\Tools\VsDevCmd.bat\" -arch=arm64 -host_arch=arm64 -no_logo', `
-      '%*' `
-    ); `
-    Set-Content -Path C:\entrypoint.cmd -Value $lines -Encoding ascii
+COPY entrypoint.cmd C:/entrypoint.cmd
 
 ENTRYPOINT ["cmd", "/S", "/C", "C:\\entrypoint.cmd"]
 CMD ["powershell"]
