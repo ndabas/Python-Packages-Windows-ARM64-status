@@ -99,13 +99,17 @@ def classify(package: str) -> dict[str, str]:
         if item.get("packagetype") != "bdist_wheel":
             continue
         parts = item.get("filename", "").removesuffix(".whl").split("-")
-        if len(parts) < 2:
+        if len(parts) < 3:
             continue
-        abi_tag, platform_tag = parts[-2], parts[-1]
-        # A wheel filename may carry several dot-separated platform tags.
+        python_tag, abi_tag, platform_tag = parts[-3], parts[-2], parts[-1]
+        # Each tag may carry several dot-separated values.
+        python_tags = python_tag.split(".")
         platform_tags = platform_tag.split(".")
+        runs_on_cpython = any(
+            tag.startswith(("py", "cp")) for tag in python_tags
+        )
 
-        if abi_tag == "none" and "any" in platform_tags:
+        if runs_on_cpython and abi_tag == "none" and "any" in platform_tags:
             platform_independent = True
         else:
             platform_specific = True
