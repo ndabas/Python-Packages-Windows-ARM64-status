@@ -41,18 +41,18 @@ $deadline = if ($TimeLimitHours -gt 0) { (Get-Date).AddHours($TimeLimitHours) } 
 $pipArgs = @('install', '--no-warn-script-location', '--report', 'C:\out\report.json')
 if ($OnlyBinary) { $pipArgs += '--only-binary=:all:' }
 
-$packages = @(Get-Content $ListPath |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -and -not $_.StartsWith('#') })
+$packages = @(Get-Content $ListPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
 
 # Mounted into the container to receive pip's install report
 $reportDir = Join-Path ([IO.Path]::GetTempPath()) "pip-reports-$PID"
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 $reportPath = Join-Path $reportDir 'report.json'
 
+$rows = @()
+
 try {
     $done = 0
-    $rows = foreach ($pkg in $packages) {
+    foreach ($pkg in $packages) {
         if ((Get-Date) -gt $deadline) {
             Write-Warning "Time limit of $TimeLimitHours h reached; skipping $($packages.Count - $done) remaining packages."
             break
@@ -63,8 +63,7 @@ try {
         else { Write-Host "===== pip install $pkg =====" }
 
         Remove-Item $reportPath -ErrorAction SilentlyContinue
-        docker run --rm -v "${reportDir}:C:\out" -v "${CacheDir}:C:\pip-cache" $Image `
-            python -m pip @pipArgs $pkg
+        docker run --rm -v "${reportDir}:C:\out" -v "${CacheDir}:C:\pip-cache" $Image python -m pip @pipArgs $pkg
 
         if ($env:GITHUB_ACTIONS) { Write-Host '::endgroup::' }
 
@@ -77,7 +76,7 @@ try {
                 Where-Object { $_.requested } |
                 ForEach-Object { $_.download_info.url }) -join ' '
         }
-        [pscustomobject]@{
+        $rows += [pscustomobject]@{
             package                          = $pkg
             "${ColumnPrefix}_install_status" = $status
             "${ColumnPrefix}_binary_url"     = $url
