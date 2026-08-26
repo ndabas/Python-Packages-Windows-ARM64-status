@@ -108,8 +108,8 @@ jobs:
       - name: Run smoke test container
         shell: pwsh
         run: |
-          docker run --rm mcr.microsoft.com/windows/servercore:ltsc2025-arm64 `
-            powershell -Command "Write-Host 'Hello from inside the container'; Write-Host ('Architecture: ' + `$env:PROCESSOR_ARCHITECTURE); [System.Environment]::OSVersion.VersionString"
+          docker run --rm mcr.microsoft.com/windows/nanoserver:ltsc2025-arm64 `
+            cmd /c "echo Hello from inside the container && echo Architecture: %PROCESSOR_ARCHITECTURE% && ver"
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
 
       - name: Stop dockerd
