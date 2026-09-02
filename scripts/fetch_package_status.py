@@ -224,7 +224,8 @@ def evaluate(
     cols: dict[str, str],
 ) -> dict:
     """Work out the status/timeline the sheet should show for one package."""
-    prs = [cache[url] for url, *_ in pr_refs(sheet_row.get(cols["pr"], ""))]
+    # Rows with wheels on PyPI are settled, so their PRs are never looked up.
+    prs = [cache[url] for url, *_ in pr_refs(sheet_row.get(cols["pr"], "")) if url in cache]
 
     if status_row and status_row[f"has_{TARGET_PLATFORM}"] == "true":
         status = STATUS_BUILDS_AVAILABLE
@@ -380,7 +381,19 @@ def main() -> None:
 
     owner = repository_owner()
     by_package = {r["package"].lower(): r for r in rows}
-    cache = check_pull_requests(sheet_rows, cols["pr"])
+    unresolved = [
+        row
+        for row in sheet_rows
+        if (by_package.get(row[cols["package"]].lower()) or {}).get(
+            f"has_{TARGET_PLATFORM}"
+        )
+        != "true"
+    ]
+    print(
+        f"Checking pull requests for {len(unresolved)} of {len(sheet_rows)} packages "
+        f"({len(sheet_rows) - len(unresolved)} already have {TARGET_PLATFORM} wheels)"
+    )
+    cache = check_pull_requests(unresolved, cols["pr"])
     results = [
         evaluate(row, by_package.get(row[cols["package"]].lower()), owner, cache, cols)
         for row in sheet_rows
