@@ -126,6 +126,7 @@ jobs:
           GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
           GOOGLE_SHEET_NAME: ${{ secrets.GOOGLE_SHEET_NAME }}
           GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ secrets.GOOGLE_SHEET_COL_PACKAGE_NAME }}
+          GH_TOKEN: ${{ github.token }}
         run: python scripts/fetch_package_status.py
 
       - name: Upload package lists

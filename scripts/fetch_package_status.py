@@ -2,7 +2,9 @@
 
 Reads GOOGLE_SHEET_URL / GOOGLE_SHEET_NAME / GOOGLE_SHEET_COL_PACKAGE_NAME from a
 .env file, queries the PyPI JSON API for each package, and writes a status CSV plus
-the two package lists consumed by the test/build matrices.
+the two package lists consumed by the test/build matrices. It then compares the
+sheet against PyPI and the linked GitHub pull requests and writes a markdown report
+of the rows that need updating (the sheet itself is never modified).
 """
 
 import argparse
@@ -10,6 +12,8 @@ import csv
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -18,6 +22,13 @@ import urllib.request
 PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 USER_AGENT = "Python-Packages-Windows-ARM64-status/1.0"
 TARGET_PLATFORM = "win_arm64"
+GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
+PR_URL_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)", re.I)
+
+STATUS_BUILDS_AVAILABLE = "Builds Available"
+STATUS_PR_UNDER_REVIEW = "PR Under Review"
+STATUS_PR_MERGED = "PR Merged"
+TIMELINE_DONE = "Done"
 
 
 def load_env(path: str) -> dict[str, str]:
@@ -40,6 +51,18 @@ def fetch(url: str) -> bytes:
         return response.read()
 
 
+def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run a command, decoding its output as UTF-8 rather than the console codepage."""
+    return subprocess.run(
+        command,
+        capture_output=True,
+        check=check,
+        encoding="utf-8",
+        errors="replace",
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+
+
 def sheet_csv_url(sheet_url: str, sheet_name: str) -> str:
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url)
     if not match:
@@ -48,7 +71,8 @@ def sheet_csv_url(sheet_url: str, sheet_name: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq?{query}"
 
 
-def read_packages(sheet_url: str, sheet_name: str, column: str) -> list[str]:
+def read_sheet(sheet_url: str, sheet_name: str, column: str) -> list[dict[str, str]]:
+    """Return the sheet rows that carry a package name, de-duplicated on that name."""
     text = fetch(sheet_csv_url(sheet_url, sheet_name)).decode("utf-8-sig")
     reader = csv.DictReader(text.splitlines())
     if not reader.fieldnames or column not in reader.fieldnames:
@@ -56,15 +80,15 @@ def read_packages(sheet_url: str, sheet_name: str, column: str) -> list[str]:
             f"Column {column!r} not in sheet {sheet_name!r}; found {reader.fieldnames}"
         )
 
-    packages: list[str] = []
+    rows: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in reader:
         name = (row.get(column) or "").strip()
         key = name.lower()
         if name and not name.startswith("#") and key not in seen:
             seen.add(key)
-            packages.append(name)
-    return packages
+            rows.append({k: (v or "").strip() for k, v in row.items() if k})
+    return rows
 
 
 def classify(package: str) -> dict[str, str]:
@@ -125,6 +149,166 @@ def classify(package: str) -> dict[str, str]:
     return row
 
 
+def repository_owner() -> str:
+    """Owner of the repository this script belongs to."""
+    slug = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" in slug:
+        return slug.split("/", 1)[0]
+    try:
+        url = run(["git", "remote", "get-url", "origin"]).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    match = re.search(r"github\.com[:/]([^/\s]+)/", url)
+    return match.group(1) if match else ""
+
+
+def fetch_pull_request(owner: str, repo: str, number: str) -> dict:
+    """Fetch a pull request via the gh CLI when available, otherwise the REST API."""
+    if shutil.which("gh"):
+        result = run(["gh", "api", f"repos/{owner}/{repo}/pulls/{number}"], check=False)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        return {"error": (result.stderr.strip().splitlines() or ["gh api failed"])[-1]}
+
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = GITHUB_API_URL.format(owner=owner, repo=repo, number=number)
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return {"error": f"HTTP {exc.code}"}
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
+        return {"error": str(exc)}
+
+
+def pr_refs(links: str) -> list[tuple[str, str, str, str]]:
+    """Every GitHub PR URL found in a whitespace separated cell, split into parts."""
+    return [
+        (f"https://github.com/{owner}/{repo}/pull/{number}", owner, repo, number)
+        for owner, repo, number in PR_URL_RE.findall(links)
+    ]
+
+
+def check_pull_requests(sheet_rows: list[dict[str, str]], column: str) -> dict[str, dict]:
+    """Look up every distinct PR linked from the sheet, reporting progress."""
+    refs: dict[str, tuple[str, str, str]] = {}
+    for row in sheet_rows:
+        for url, owner, repo, number in pr_refs(row.get(column, "")):
+            refs.setdefault(url, (owner, repo, number))
+
+    cache: dict[str, dict] = {}
+    for index, (url, (owner, repo, number)) in enumerate(refs.items(), start=1):
+        data = fetch_pull_request(owner, repo, number)
+        entry = {
+            "url": url,
+            "state": data.get("state", ""),
+            "merged": bool(data.get("merged_at")),
+            "author": (data.get("user") or {}).get("login", ""),
+            "error": data.get("error", ""),
+        }
+        cache[url] = entry
+        state = entry["error"] or ("merged" if entry["merged"] else entry["state"])
+        print(f"[{index}/{len(refs)}] {url}: {state}", flush=True)
+    return cache
+
+
+def evaluate(
+    sheet_row: dict[str, str],
+    status_row: dict[str, str] | None,
+    owner: str,
+    cache: dict[str, dict],
+    cols: dict[str, str],
+) -> dict:
+    """Work out the status/timeline the sheet should show for one package."""
+    prs = [cache[url] for url, *_ in pr_refs(sheet_row.get(cols["pr"], ""))]
+
+    if status_row and status_row[f"has_{TARGET_PLATFORM}"] == "true":
+        status = STATUS_BUILDS_AVAILABLE
+    elif any(pr["state"] == "open" for pr in prs):
+        status = STATUS_PR_UNDER_REVIEW
+    elif any(pr["merged"] for pr in prs):
+        status = STATUS_PR_MERGED
+    else:
+        status = ""
+
+    timeline = TIMELINE_DONE if owner and any(
+        pr["author"].lower() == owner.lower() for pr in prs
+    ) else ""
+
+    return {
+        "package": sheet_row[cols["package"]],
+        "current_status": sheet_row.get(cols["status"], ""),
+        "proposed_status": status,
+        "current_timeline": sheet_row.get(cols["timeline"], ""),
+        "proposed_timeline": timeline,
+        "prs": prs,
+    }
+
+
+def render_report(results: list[dict], owner: str, cols: dict[str, str]) -> str:
+    """Render the rows whose status or timeline differs from the sheet."""
+    changes = [
+        r
+        for r in results
+        if (r["proposed_status"] and r["proposed_status"] != r["current_status"])
+        or (r["proposed_timeline"] and r["proposed_timeline"] != r["current_timeline"])
+    ]
+    errors = sorted(
+        {pr["url"] + ": " + pr["error"] for r in results for pr in r["prs"] if pr["error"]}
+    )
+
+    lines = [
+        "# Google Sheet update report",
+        "",
+        f"Repository owner used for the {cols['timeline']!r} check: "
+        f"{owner or '(unknown)'}",
+        "",
+        f"{len(changes)} of {len(results)} rows need updating. "
+        "The sheet is not modified by this report.",
+        "",
+    ]
+
+    if changes:
+        lines += [
+            f"| Package | {cols['status']} (sheet) | {cols['status']} (proposed) | "
+            f"{cols['timeline']} (sheet) | {cols['timeline']} (proposed) | Pull requests |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for row in changes:
+            status = (
+                row["proposed_status"]
+                if row["proposed_status"] != row["current_status"]
+                else "—"
+            )
+            timeline = (
+                row["proposed_timeline"]
+                if row["proposed_timeline"] != row["current_timeline"]
+                else "—"
+            )
+            prs = "<br>".join(
+                f"[#{pr['url'].rsplit('/', 1)[1]}]({pr['url']}) "
+                f"({pr['error'] or ('merged' if pr['merged'] else pr['state'])}"
+                f"{', @' + pr['author'] if pr['author'] else ''})"
+                for pr in row["prs"]
+            )
+            lines.append(
+                f"| {row['package']} | {row['current_status'] or '—'} | {status} | "
+                f"{row['current_timeline'] or '—'} | {timeline} | {prs or '—'} |"
+            )
+        lines.append("")
+
+    if errors:
+        lines += ["## Pull requests that could not be checked", ""]
+        lines += [f"- {error}" for error in errors]
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main() -> None:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     parser = argparse.ArgumentParser(description=__doc__)
@@ -135,21 +319,28 @@ def main() -> None:
         help="Directory for the CSV and package list files",
     )
     parser.add_argument("--csv-name", default=f"{TARGET_PLATFORM}-status.csv")
+    parser.add_argument("--report-name", default="sheet-update-report.md")
     args = parser.parse_args()
 
     env = load_env(args.env)
 
-    def setting(name: str) -> str:
-        value = os.environ.get(name) or env.get(name)
+    def setting(name: str, default: str | None = None) -> str:
+        value = os.environ.get(name) or env.get(name) or default
         if not value:
             raise SystemExit(f"Set {name} in the environment or in {args.env}")
         return value
 
     sheet_url = setting("GOOGLE_SHEET_URL")
     sheet_name = setting("GOOGLE_SHEET_NAME")
-    column = setting("GOOGLE_SHEET_COL_PACKAGE_NAME")
+    cols = {
+        "package": setting("GOOGLE_SHEET_COL_PACKAGE_NAME"),
+        "status": setting("GOOGLE_SHEET_COL_CURRENT_STATUS", "Current Status"),
+        "pr": setting("GOOGLE_SHEET_COL_PR_LINK", "GitHub PR Link"),
+        "timeline": setting("GOOGLE_SHEET_COL_TIMELINES", "Timelines"),
+    }
 
-    packages = read_packages(sheet_url, sheet_name, column)
+    sheet_rows = read_sheet(sheet_url, sheet_name, cols["package"])
+    packages = [row[cols["package"]] for row in sheet_rows]
     print(f"Read {len(packages)} packages from sheet {sheet_name!r}")
 
     rows = []
@@ -186,6 +377,25 @@ def main() -> None:
     print(f"Wrote {csv_path} ({len(rows)} packages)")
     print(f"Wrote {test_path} ({len(testable)} packages)")
     print(f"Wrote {build_path} ({len(buildable)} packages)")
+
+    owner = repository_owner()
+    by_package = {r["package"].lower(): r for r in rows}
+    cache = check_pull_requests(sheet_rows, cols["pr"])
+    results = [
+        evaluate(row, by_package.get(row[cols["package"]].lower()), owner, cache, cols)
+        for row in sheet_rows
+    ]
+
+    report = render_report(results, owner, cols)
+    report_path = os.path.join(args.output_dir, args.report_name)
+    with open(report_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(report)
+    print(f"Wrote {report_path} ({len(cache)} pull requests checked)")
+
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(report + "\n")
 
     if any(r["error"] for r in rows):
         print("Some packages could not be queried; see the error column.", file=sys.stderr)
