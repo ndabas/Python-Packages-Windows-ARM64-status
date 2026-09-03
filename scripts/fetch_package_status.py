@@ -1,7 +1,8 @@
 """Report win_arm64 wheel availability for a package list held in a Google Sheet.
 
-Reads GOOGLE_SHEET_URL / GOOGLE_SHEET_NAME / GOOGLE_SHEET_COL_PACKAGE_NAME from a
-.env file, queries the PyPI JSON API for each package, and writes a status CSV plus
+Reads GOOGLE_SHEET_URL / GOOGLE_SHEET_NAME / GOOGLE_SHEET_COL_PACKAGE_NAME (and the
+optional GOOGLE_SHEET_GID) from a .env file, queries the PyPI JSON API for each
+package, and writes a status CSV plus
 the two package lists consumed by the test/build matrices. It then compares the
 sheet against PyPI and the linked GitHub pull requests and writes a markdown report
 of the rows that need updating (the sheet itself is never modified).
@@ -9,6 +10,7 @@ of the rows that need updating (the sheet itself is never modified).
 
 import argparse
 import csv
+import html
 import json
 import os
 import re
@@ -22,6 +24,10 @@ import urllib.request
 PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 USER_AGENT = "Python-Packages-Windows-ARM64-status/1.0"
 TARGET_PLATFORM = "win_arm64"
+SHEET_EXPORT_URL = "https://docs.google.com/spreadsheets/d/{id}/export?format=csv&gid={gid}"
+SHEET_GVIZ_URL = "https://docs.google.com/spreadsheets/d/{id}/gviz/tq?{query}"
+SHEET_HTMLVIEW_URL = "https://docs.google.com/spreadsheets/d/{id}/htmlview"
+SHEET_TAB_RE = re.compile(r'\{name:\s*"((?:[^"\\]|\\.)*)"[^{}]*?gid:\s*"(\d+)"')
 GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
 PR_URL_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)", re.I)
 
@@ -63,17 +69,54 @@ def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess[s
     )
 
 
-def sheet_csv_url(sheet_url: str, sheet_name: str) -> str:
+def spreadsheet_id(sheet_url: str) -> str:
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url)
     if not match:
         raise SystemExit(f"Could not find a spreadsheet id in {sheet_url!r}")
+    return match.group(1)
+
+
+def find_gid(sheet_id: str, sheet_name: str) -> str:
+    """Map a tab name to its gid using the public htmlview page; "" when unknown."""
+    try:
+        page = fetch(SHEET_HTMLVIEW_URL.format(id=sheet_id)).decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError):
+        return ""
+    for name, gid in SHEET_TAB_RE.findall(page):
+        try:
+            name = json.loads(f'"{name}"')
+        except json.JSONDecodeError:
+            pass
+        if html.unescape(name).strip().lower() == sheet_name.strip().lower():
+            return gid
+    return ""
+
+
+def sheet_csv_url(sheet_url: str, sheet_name: str, gid: str = "") -> str:
+    """CSV endpoint for the sheet.
+
+    The export endpoint returns every row, while the gviz endpoint used as a fallback
+    honours any filter applied to the tab and so can hide rows.
+    """
+    sheet_id = spreadsheet_id(sheet_url)
+    gid = gid or find_gid(sheet_id, sheet_name)
+    if gid:
+        return SHEET_EXPORT_URL.format(id=sheet_id, gid=gid)
+    print(
+        f"Could not resolve a gid for sheet {sheet_name!r}; falling back to the gviz "
+        "endpoint, which omits rows hidden by a filter. Set GOOGLE_SHEET_GID to avoid "
+        "this.",
+        file=sys.stderr,
+    )
     query = urllib.parse.urlencode({"tqx": "out:csv", "sheet": sheet_name})
-    return f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq?{query}"
+    return SHEET_GVIZ_URL.format(id=sheet_id, query=query)
 
 
-def read_sheet(sheet_url: str, sheet_name: str, column: str) -> list[dict[str, str]]:
+def read_sheet(
+    sheet_url: str, sheet_name: str, column: str, gid: str = ""
+) -> list[dict[str, str]]:
     """Return the sheet rows that carry a package name, de-duplicated on that name."""
-    text = fetch(sheet_csv_url(sheet_url, sheet_name)).decode("utf-8-sig")
+    text = fetch(sheet_csv_url(sheet_url, sheet_name, gid)).decode("utf-8-sig")
     reader = csv.DictReader(text.splitlines())
     if not reader.fieldnames or column not in reader.fieldnames:
         raise SystemExit(
@@ -325,14 +368,15 @@ def main() -> None:
 
     env = load_env(args.env)
 
-    def setting(name: str, default: str | None = None) -> str:
+    def setting(name: str, default: str = "", required: bool = True) -> str:
         value = os.environ.get(name) or env.get(name) or default
-        if not value:
+        if not value and required:
             raise SystemExit(f"Set {name} in the environment or in {args.env}")
         return value
 
     sheet_url = setting("GOOGLE_SHEET_URL")
     sheet_name = setting("GOOGLE_SHEET_NAME")
+    gid = setting("GOOGLE_SHEET_GID", required=False)
     cols = {
         "package": setting("GOOGLE_SHEET_COL_PACKAGE_NAME"),
         "status": setting("GOOGLE_SHEET_COL_CURRENT_STATUS", "Current Status"),
@@ -340,7 +384,7 @@ def main() -> None:
         "timeline": setting("GOOGLE_SHEET_COL_TIMELINES", "Timelines"),
     }
 
-    sheet_rows = read_sheet(sheet_url, sheet_name, cols["package"])
+    sheet_rows = read_sheet(sheet_url, sheet_name, cols["package"], gid)
     packages = [row[cols["package"]] for row in sheet_rows]
     print(f"Read {len(packages)} packages from sheet {sheet_name!r}")
 
