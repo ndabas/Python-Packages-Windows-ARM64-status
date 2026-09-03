@@ -5,7 +5,8 @@ optional GOOGLE_SHEET_GID) from a .env file, queries the PyPI JSON API for each
 package, and writes a status CSV plus
 the two package lists consumed by the test/build matrices. It then compares the
 sheet against PyPI and the linked GitHub pull requests and writes a markdown report
-of the rows that need updating (the sheet itself is never modified).
+of the rows that need updating (the sheet itself is never modified). The GitHub CLI
+(`gh`) is required for the pull request lookups.
 """
 
 import argparse
@@ -28,7 +29,6 @@ SHEET_EXPORT_URL = "https://docs.google.com/spreadsheets/d/{id}/export?format=cs
 SHEET_GVIZ_URL = "https://docs.google.com/spreadsheets/d/{id}/gviz/tq?{query}"
 SHEET_HTMLVIEW_URL = "https://docs.google.com/spreadsheets/d/{id}/htmlview"
 SHEET_TAB_RE = re.compile(r'\{name:\s*"((?:[^"\\]|\\.)*)"[^{}]*?gid:\s*"(\d+)"')
-GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
 PR_URL_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)", re.I)
 
 STATUS_BUILDS_AVAILABLE = "Builds Available"
@@ -206,26 +206,13 @@ def repository_owner() -> str:
 
 
 def fetch_pull_request(owner: str, repo: str, number: str) -> dict:
-    """Fetch a pull request via the gh CLI when available, otherwise the REST API."""
-    if shutil.which("gh"):
-        result = run(["gh", "api", f"repos/{owner}/{repo}/pulls/{number}"], check=False)
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-        return {"error": (result.stderr.strip().splitlines() or ["gh api failed"])[-1]}
-
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    url = GITHUB_API_URL.format(owner=owner, repo=repo, number=number)
-    request = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        return {"error": f"HTTP {exc.code}"}
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        return {"error": str(exc)}
+    """Fetch a pull request through the gh CLI."""
+    endpoint = f"repos/{owner}/{repo}/pulls/{number}"
+    result = run(["gh", "api", endpoint], check=False)
+    if result.returncode != 0:
+        message = (result.stderr.strip().splitlines() or ["gh api failed"])[-1]
+        raise SystemExit(f"gh api {endpoint}: {message}")
+    return json.loads(result.stdout)
 
 
 def pr_refs(links: str) -> list[tuple[str, str, str, str]]:
@@ -251,10 +238,9 @@ def check_pull_requests(sheet_rows: list[dict[str, str]], column: str) -> dict[s
             "state": data.get("state", ""),
             "merged": bool(data.get("merged_at")),
             "author": (data.get("user") or {}).get("login", ""),
-            "error": data.get("error", ""),
         }
         cache[url] = entry
-        state = entry["error"] or ("merged" if entry["merged"] else entry["state"])
+        state = "merged" if entry["merged"] else entry["state"]
         print(f"[{index}/{len(refs)}] {url}: {state}", flush=True)
     return cache
 
@@ -301,9 +287,6 @@ def render_report(results: list[dict], owner: str, cols: dict[str, str]) -> str:
         if (r["proposed_status"] and r["proposed_status"] != r["current_status"])
         or (r["proposed_timeline"] and r["proposed_timeline"] != r["current_timeline"])
     ]
-    errors = sorted(
-        {pr["url"] + ": " + pr["error"] for r in results for pr in r["prs"] if pr["error"]}
-    )
 
     lines = [
         "# Google Sheet update report",
@@ -335,7 +318,7 @@ def render_report(results: list[dict], owner: str, cols: dict[str, str]) -> str:
             )
             prs = "<br>".join(
                 f"[#{pr['url'].rsplit('/', 1)[1]}]({pr['url']}) "
-                f"({pr['error'] or ('merged' if pr['merged'] else pr['state'])}"
+                f"({'merged' if pr['merged'] else pr['state']}"
                 f"{', @' + pr['author'] if pr['author'] else ''})"
                 for pr in row["prs"]
             )
@@ -343,11 +326,6 @@ def render_report(results: list[dict], owner: str, cols: dict[str, str]) -> str:
                 f"| {row['package']} | {row['current_status'] or '—'} | {status} | "
                 f"{row['current_timeline'] or '—'} | {timeline} | {prs or '—'} |"
             )
-        lines.append("")
-
-    if errors:
-        lines += ["## Pull requests that could not be checked", ""]
-        lines += [f"- {error}" for error in errors]
         lines.append("")
 
     return "\n".join(lines)
@@ -365,6 +343,9 @@ def main() -> None:
     parser.add_argument("--csv-name", default=f"{TARGET_PLATFORM}-status.csv")
     parser.add_argument("--report-name", default="sheet-update-report.md")
     args = parser.parse_args()
+
+    if not shutil.which("gh"):
+        raise SystemExit("The GitHub CLI (gh) is required; see https://cli.github.com")
 
     env = load_env(args.env)
 
@@ -455,7 +436,7 @@ def main() -> None:
             fh.write(report + "\n")
 
     if any(r["error"] for r in rows):
-        print("Some packages could not be queried; see the error column.", file=sys.stderr)
+        raise SystemExit("Some packages could not be queried; see the error column.")
 
 
 if __name__ == "__main__":
