@@ -279,7 +279,12 @@ def evaluate(
     }
 
 
-def render_report(results: list[dict], owner: str, cols: dict[str, str]) -> str:
+def render_report(
+    results: list[dict],
+    owner: str,
+    cols: dict[str, str],
+    ignored: list[tuple[str, str]],
+) -> str:
     """Render the rows whose status or timeline differs from the sheet."""
     changes = [
         r
@@ -328,6 +333,19 @@ def render_report(results: list[dict], owner: str, cols: dict[str, str]) -> str:
             )
         lines.append("")
 
+    if ignored:
+        lines += [
+            "## Packages not looked up on PyPI",
+            "",
+            f"{len(ignored)} package names were skipped; their pull request links are "
+            "still checked above.",
+            "",
+            "| Package | Reason |",
+            "| --- | --- |",
+        ]
+        lines += [f"| {name} | {reason} |" for name, reason in ignored]
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -366,12 +384,25 @@ def main() -> None:
     }
 
     sheet_rows = read_sheet(sheet_url, sheet_name, cols["package"], gid)
-    packages = [row[cols["package"]] for row in sheet_rows]
-    print(f"Read {len(packages)} packages from sheet {sheet_name!r}")
+
+    # Only the PyPI lookup is skipped for these; their PR links are still checked below.
+    ignored: list[tuple[str, str]] = []
+    packages = []
+    for row in sheet_rows:
+        name = row[cols["package"]]
+        if re.search(r"\s", name):
+            ignored.append((name, "name contains whitespace"))
+        else:
+            packages.append(name)
+    print(f"Read {len(sheet_rows)} rows from sheet {sheet_name!r}")
 
     rows = []
     for index, package in enumerate(packages, start=1):
         row = classify(package)
+        if row["error"] == "HTTP 404":
+            ignored.append((package, "not found on PyPI"))
+            print(f"[{index}/{len(packages)}] {package}: not on PyPI, ignored", flush=True)
+            continue
         rows.append(row)
         status = row["error"] or (
             f"{TARGET_PLATFORM}" if row[f"has_{TARGET_PLATFORM}"] == "true"
@@ -403,6 +434,8 @@ def main() -> None:
     print(f"Wrote {csv_path} ({len(rows)} packages)")
     print(f"Wrote {test_path} ({len(testable)} packages)")
     print(f"Wrote {build_path} ({len(buildable)} packages)")
+    if ignored:
+        print(f"Skipped the PyPI lookup for {len(ignored)} packages; see the report")
 
     owner = repository_owner()
     by_package = {r["package"].lower(): r for r in rows}
@@ -424,7 +457,7 @@ def main() -> None:
         for row in sheet_rows
     ]
 
-    report = render_report(results, owner, cols)
+    report = render_report(results, owner, cols, ignored)
     report_path = os.path.join(args.output_dir, args.report_name)
     with open(report_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(report)
