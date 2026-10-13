@@ -281,9 +281,10 @@ class OutputTests(unittest.TestCase):
             report.main()
             self.assertEqual(lookup.call_count, 3)
             self.assertIn("missing: PyPI lookup: HTTP 404", warnings.getvalue())
+            # The step summary is reserved for the sheet update report.
             self.assertEqual(
                 sorted(os.listdir(directory)),
-                ["package-blocker-report.md", "package-blockers.tsv", "summary.md"],
+                ["package-blocker-report.md", "package-blockers.tsv"],
             )
             with open(os.path.join(directory, "package-blockers.tsv"), newline="", encoding="utf-8") as fh:
                 self.assertEqual(
@@ -308,13 +309,11 @@ class OutputTests(unittest.TestCase):
                 "| 1 | Core_Pkg | P0 | In progress | MSFT Engaged | 1 | 1 | client |", text
             )
             self.assertIn("HTTP 404", text)
-            with open(os.path.join(directory, "summary.md"), encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), text + "\n")
 
     def test_empty_report_and_tsv_header(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ, {"GITHUB_STEP_SUMMARY": ""}
-        ), contextlib.redirect_stdout(io.StringIO()):
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(
+            io.StringIO()
+        ):
             report.write_outputs(directory, [], [])
             with open(os.path.join(directory, "package-blockers.tsv"), encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "Package\tPotential Blockers\n")

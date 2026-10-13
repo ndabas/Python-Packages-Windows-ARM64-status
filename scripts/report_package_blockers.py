@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from packaging.requirements import InvalidRequirement, Requirement
 
-from common import DATA_DIR, ROOT, append_step_summary, normalize_name, write_text
+from common import DATA_DIR, ROOT, normalize_name, write_text
 from pypi import lookup, wheel_status
 from sheet import is_package_row, load_sheet
 
@@ -249,7 +249,6 @@ def write_outputs(
     write_text(report_path, report)
     for path in (tsv_path, report_path):
         print(f"Wrote {path}")
-    append_step_summary(report)
 
 
 def main() -> None:

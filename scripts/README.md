@@ -48,8 +48,7 @@ Outputs:
   package depends on directly or transitively within the sheet. A package never
   lists itself; the column is empty when no upstream blockers are found. Set
   `GOOGLE_SHEET_GID` so rows hidden by a sheet filter are not omitted.
-- `package-blocker-report.md`: ranking, methodology and metadata gaps. Also
-  appended to `GITHUB_STEP_SUMMARY` when set.
+- `package-blocker-report.md`: ranking, methodology and metadata gaps.
 
 A blocker is a sheet package whose latest PyPI release has neither a pure-Python
 wheel nor a `win_arm64` wheel, using the same wheel checks as
