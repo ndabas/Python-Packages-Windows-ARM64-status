@@ -6,115 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  MOBY_REPO: https://github.com/moby/moby.git
-  MOBY_REF: master
-
 jobs:
-  build-docker:
-    runs-on: windows-11-arm
-    outputs:
-      moby-sha: ${{ steps.moby.outputs.sha }}
-      docker-preinstalled: ${{ steps.check-docker.outputs.preinstalled }}
-    steps:
-      - name: Check for an existing Docker on PATH
-        id: check-docker
-        shell: pwsh
-        run: |
-          $docker = Get-Command docker -ErrorAction SilentlyContinue
-          if ($docker) {
-            Write-Host "Using pre-installed docker: $($docker.Source)"
-            $preinstalled = 'true'
-          } else {
-            Write-Host 'No docker on PATH; building it from moby'
-            $preinstalled = 'false'
-          }
-          "preinstalled=$preinstalled" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Resolve moby commit
-        id: moby
-        if: steps.check-docker.outputs.preinstalled != 'true'
-        shell: pwsh
-        run: |
-          $sha = (git ls-remote $env:MOBY_REPO $env:MOBY_REF | Select-Object -First 1).Split()[0]
-          if (-not $sha) { throw "Could not resolve $env:MOBY_REF in $env:MOBY_REPO" }
-          Write-Host "moby commit: $sha"
-          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Cache Docker binaries
-        id: cache-docker
-        if: steps.check-docker.outputs.preinstalled != 'true'
-        uses: actions/cache@v6
-        with:
-          path: docker-bin
-          key: docker-windows-arm64-${{ steps.moby.outputs.sha }}
-
-      - name: Clone moby
-        if: steps.check-docker.outputs.preinstalled != 'true' && steps.cache-docker.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          git config --global core.longpaths true
-          git clone --depth 1 --branch $env:MOBY_REF $env:MOBY_REPO moby
-
-      - name: Set up Go
-        if: steps.check-docker.outputs.preinstalled != 'true' && steps.cache-docker.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: moby/go.mod
-          cache: false
-
-      - name: Build Docker client and daemon
-        if: steps.check-docker.outputs.preinstalled != 'true' && steps.cache-docker.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          go install github.com/tc-hib/go-winres@latest
-          $env:GOPATH = go env GOPATH
-          $env:Path += ";$env:GOPATH\bin"
-          cd moby
-          ./hack/make.ps1 -Client -Daemon
-          New-Item -ItemType Directory -Force -Path ..\docker-bin | Out-Null
-          Copy-Item bundles\*.exe ..\docker-bin\
-
-      - name: Add Docker to PATH
-        if: steps.check-docker.outputs.preinstalled != 'true'
-        shell: pwsh
-        run: |
-          (Resolve-Path docker-bin).Path |
-            Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-      - name: Start dockerd in background
-        id: dockerd
-        background: true
-        shell: pwsh
-        run: |
-          if ('${{ steps.check-docker.outputs.preinstalled }}' -eq 'true') {
-            Write-Host 'Using the pre-installed docker; not starting dockerd'
-          } else {
-            dockerd --exec-opt isolation=process
-          }
-
-      - name: Wait for dockerd to be ready
-        shell: pwsh
-        run: |
-          $deadline = (Get-Date).AddMinutes(3)
-          while ($true) {
-            docker version *> $null
-            if ($LASTEXITCODE -eq 0) { break }
-            if ((Get-Date) -gt $deadline) { throw 'dockerd did not become ready in time' }
-            Start-Sleep -Seconds 5
-          }
-          docker version
-
-      - name: Run smoke test container
-        shell: pwsh
-        run: |
-          docker run --rm mcr.microsoft.com/windows/nanoserver:ltsc2025-arm64 `
-            cmd /c "echo Hello from inside the container && echo Architecture: %PROCESSOR_ARCHITECTURE% && ver"
-          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
-
-      - name: Stop dockerd
-        cancel: dockerd
-
   fetch-package-lists:
     runs-on: ubuntu-latest
     steps:
@@ -137,7 +29,7 @@ jobs:
 
   test-package-installs:
     runs-on: windows-11-arm
-    needs: [build-docker, fetch-package-lists]
+    needs: fetch-package-lists
     strategy:
       fail-fast: false
       matrix:
@@ -154,56 +46,8 @@ jobs:
           name: package-lists
           path: data
 
-      - name: Check for an existing Docker on PATH
-        id: check-docker
-        shell: pwsh
-        run: |
-          $docker = Get-Command docker -ErrorAction SilentlyContinue
-          if ($docker) {
-            Write-Host "Using pre-installed docker: $($docker.Source)"
-            $preinstalled = 'true'
-          } else {
-            Write-Host 'No docker on PATH; restoring the moby build'
-            $preinstalled = 'false'
-          }
-          "preinstalled=$preinstalled" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Restore Docker binaries
-        if: steps.check-docker.outputs.preinstalled != 'true'
-        uses: actions/cache/restore@v6
-        with:
-          path: docker-bin
-          key: docker-windows-arm64-${{ needs.build-docker.outputs.moby-sha }}
-          fail-on-cache-miss: true
-
-      - name: Add Docker to PATH
-        if: steps.check-docker.outputs.preinstalled != 'true'
-        shell: pwsh
-        run: |
-          (Resolve-Path docker-bin).Path |
-            Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-      - name: Start dockerd in background
-        id: dockerd
-        background: true
-        shell: pwsh
-        run: |
-          if ('${{ steps.check-docker.outputs.preinstalled }}' -eq 'true') {
-            Write-Host 'Using the pre-installed docker; not starting dockerd'
-          } else {
-            dockerd --exec-opt isolation=process
-          }
-
-      - name: Wait for dockerd to be ready
-        shell: pwsh
-        run: |
-          $deadline = (Get-Date).AddMinutes(3)
-          while ($true) {
-            docker version *> $null
-            if ($LASTEXITCODE -eq 0) { break }
-            if ((Get-Date) -gt $deadline) { throw 'dockerd did not become ready in time' }
-            Start-Sleep -Seconds 5
-          }
+      - name: Set up Docker
+        uses: ndabas/setup-moby-windows-arm64@v1
 
       - name: Build Python image
         shell: pwsh
@@ -239,9 +83,6 @@ jobs:
         with:
           name: results-py${{ matrix.python-version }}${{ matrix.buildtools && '-buildtools' || '' }}
           path: results-*.csv
-
-      - name: Stop dockerd
-        cancel: dockerd
 
   consolidate-results:
     runs-on: ubuntu-latest
