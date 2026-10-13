@@ -2,13 +2,14 @@
 
 Reads GOOGLE_SHEET_URL / GOOGLE_SHEET_NAME / GOOGLE_SHEET_COL_PACKAGE_NAME (and the
 optional GOOGLE_SHEET_GID) from the environment or a .env file and queries the PyPI
-JSON API for each package. It writes the two package lists consumed by the
-test/build matrices: test-win_arm64.txt holds the packages whose sheet status is
-"Builds Available", and test-win_arm64-buildtools.txt those with no status or
-"Needs PR". It then compares the sheet against PyPI and the linked GitHub pull
-requests and writes a markdown report of the rows that need updating (the sheet
-itself is never modified). The GitHub CLI (`gh`) is required for the pull request
-lookups.
+JSON API for each package. It compares the sheet against PyPI and the linked
+GitHub pull requests and writes a markdown report of the rows that need updating
+(the sheet itself is never modified). It then writes the two package lists
+consumed by the test/build matrices from each package's updated status (the
+proposed status where the report has one, otherwise the sheet's):
+test-win_arm64.txt holds the packages whose status is "Builds Available", and
+test-win_arm64-buildtools.txt those with no status or "Needs PR". The GitHub CLI
+(`gh`) is required for the pull request lookups.
 """
 
 import argparse
@@ -186,16 +187,17 @@ def render_report(
     return "\n".join(lines)
 
 
+def updated_status(result: dict) -> str:
+    """The status the sheet will show once the report's proposed changes are applied."""
+    return result["proposed_status"] or result["current_status"]
+
+
 def write_package_lists(
-    output_dir: str,
-    statuses: list[PackageStatus],
-    sheet_rows: list[dict[str, str]],
-    cols: dict[str, str],
+    output_dir: str, statuses: list[PackageStatus], results: list[dict]
 ) -> None:
-    """Write the test lists, which follow the sheet's status rather than PyPI's."""
+    """Write the test lists from each package's updated sheet status."""
     sheet_status = {
-        row[cols["package"]].lower(): row.get(cols["status"], "").strip().lower()
-        for row in sheet_rows
+        r["package"].lower(): updated_status(r).strip().lower() for r in results
     }
     testable = [
         s.package
@@ -258,7 +260,6 @@ def main() -> None:
             )
             print(f"{progress}: {state}", flush=True)
 
-    write_package_lists(args.output_dir, statuses, sheet_rows, cols)
     if ignored:
         print(f"Skipped the PyPI lookup for {len(ignored)} packages; see the report")
 
@@ -277,6 +278,7 @@ def main() -> None:
     results = [
         evaluate(row, has_target_wheel(row), owner, cache, cols) for row in sheet_rows
     ]
+    write_package_lists(args.output_dir, statuses, results)
 
     report = render_report(results, owner, cols, ignored)
     report_path = os.path.join(args.output_dir, args.report_name)

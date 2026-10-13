@@ -7,7 +7,7 @@ to `data` by default.
 
 | Script | Purpose |
 | --- | --- |
-| `fetch_package_status.py` | Writes `test-win_arm64.txt`, `test-win_arm64-buildtools.txt` and `sheet-update-report.md`. Requires `gh`. |
+| `fetch_package_status.py` | Writes `sheet-update-report.md`, then `test-win_arm64.txt` and `test-win_arm64-buildtools.txt` from each package's updated status (proposed where the report has one, otherwise the sheet's). Requires `gh`. |
 | `report_package_blockers.py` | Writes `package-blockers.tsv` and `package-blocker-report.md`. Requires `packaging`. |
 | `Test-PackageInstalls.ps1` | Installs each package from a list and writes `results-<prefix>.csv` and a Markdown log. |
 | `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` into `win_arm64-status-<date>.tsv`. |

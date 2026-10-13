@@ -202,25 +202,30 @@ class SharedClassificationTests(unittest.TestCase):
         self.assertFalse(status.has_target_wheel)
         self.assertEqual(status.error, "slow")
 
-    def test_status_script_package_lists_follow_sheet_status(self) -> None:
-        cols = {"package": "name", "status": "state"}
-        rows = [
-            {"name": "ready", "state": "Builds Available"},
-            {"name": "todo", "state": "needs pr"},
-            {"name": "blank", "state": ""},
-            {"name": "review", "state": "PR Under Review"},
-            {"name": "skipped", "state": ""},
+    def test_status_script_package_lists_follow_updated_status(self) -> None:
+        def result(package: str, current: str, proposed: str = "") -> dict:
+            return {"package": package, "current_status": current, "proposed_status": proposed}
+
+        results = [
+            result("ready", "Builds Available"),
+            result("todo", "needs pr"),
+            result("blank", ""),
+            result("review", "PR Under Review"),
+            result("skipped", ""),
+            result("new-wheel", "Needs PR", "Builds Available"),
+            result("new-pr", "Needs PR", "PR Under Review"),
+            result("merged", "", "PR Merged"),
         ]
         statuses = [
             fetch_package_status.PackageStatus(name)
-            for name in ("Ready", "todo", "blank", "review")
+            for name in ("Ready", "todo", "blank", "review", "new-wheel", "new-pr", "merged")
         ]
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(
             io.StringIO()
         ):
-            fetch_package_status.write_package_lists(directory, statuses, rows, cols)
+            fetch_package_status.write_package_lists(directory, statuses, results)
             with open(os.path.join(directory, "test-win_arm64.txt"), encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), "Ready\n")
+                self.assertEqual(fh.read(), "Ready\nnew-wheel\n")
             path = os.path.join(directory, "test-win_arm64-buildtools.txt")
             with open(path, encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "todo\nblank\n")
