@@ -13,7 +13,7 @@ jobs:
       GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
       GOOGLE_SHEET_NAME: ${{ secrets.GOOGLE_SHEET_NAME }}
       GOOGLE_SHEET_GID: ${{ secrets.GOOGLE_SHEET_GID }}
-      GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ secrets.GOOGLE_SHEET_COL_PACKAGE_NAME }}
+      GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ vars.GOOGLE_SHEET_COL_PACKAGE_NAME }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
