@@ -6,7 +6,6 @@ SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPref
 
 ARG PYTHON_VERSION=3.14
 ARG PYMANAGER_VERSION=26.3
-ARG INSTALL_BUILDTOOLS=false
 
 RUN New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -PropertyType DWORD -Force
 
@@ -18,9 +17,7 @@ RUN Invoke-WebRequest -Uri \"https://www.python.org/ftp/python/pymanager/python-
 ENV PYTHON_MANAGER_DEFAULT=${PYTHON_VERSION}-arm64 `
     PYTHON_MANAGER_CONFIRM=no `
     PIP_DISABLE_PIP_VERSION_CHECK=1 `
-    PIP_CACHE_DIR=C:\pip-cache `
-    CARGO_HOME=C:\cargo `
-    RUSTUP_HOME=C:\rustup
+    PIP_CACHE_DIR=C:\pip-cache
 
 RUN py install \"$env:PYTHON_VERSION-arm64\"; `
     py list; `
@@ -28,31 +25,4 @@ RUN py install \"$env:PYTHON_VERSION-arm64\"; `
 
 RUN python -VV; python -m pip --version
 
-RUN if ($env:INSTALL_BUILDTOOLS -eq 'true') { `
-      Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\vs_buildtools.exe; `
-      $p = Start-Process C:\vs_buildtools.exe -ArgumentList `
-        '--quiet', '--wait', '--norestart', '--nocache', `
-        '--installPath', 'C:\BuildTools', `
-        '--add', 'Microsoft.VisualStudio.Workload.VCTools', `
-        '--add', 'Microsoft.VisualStudio.Component.VC.Tools.ARM64', `
-        '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.22621' `
-        -Wait -PassThru; `
-      if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw \"Build Tools install failed with exit code $($p.ExitCode)\" }; `
-      Remove-Item C:\vs_buildtools.exe `
-    } else { Write-Host 'Skipping Build Tools install' }
-
-RUN if ($env:INSTALL_BUILDTOOLS -eq 'true') { `
-      Invoke-WebRequest -Uri 'https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe' -OutFile C:\rustup-init.exe; `
-      $p = Start-Process C:\rustup-init.exe -ArgumentList `
-        '-y', '--no-modify-path', '--profile', 'minimal', '--default-toolchain', 'stable' `
-        -Wait -PassThru; `
-      if ($p.ExitCode -ne 0) { throw \"rustup install failed with exit code $($p.ExitCode)\" }; `
-      Remove-Item C:\rustup-init.exe; `
-      setx /M PATH \"$env:CARGO_HOME\bin;$env:PATH\"; `
-      & \"$env:CARGO_HOME\bin\rustc.exe\" -Vv `
-    } else { Write-Host 'Skipping Rust install' }
-
-COPY entrypoint.cmd C:/entrypoint.cmd
-
-ENTRYPOINT ["cmd", "/S", "/C", "C:\\entrypoint.cmd"]
 CMD ["powershell"]

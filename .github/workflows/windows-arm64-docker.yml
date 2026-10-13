@@ -47,36 +47,56 @@ jobs:
           path: data
 
       - name: Set up Docker
+        if: ${{ !matrix.buildtools }}
         uses: ndabas/setup-moby-windows-arm64@v1
 
       - name: Build Python image
+        if: ${{ !matrix.buildtools }}
         shell: pwsh
         run: |
-          docker build -t python-arm64 `
-            --build-arg PYTHON_VERSION=${{ matrix.python-version }} `
-            --build-arg INSTALL_BUILDTOOLS=${{ matrix.buildtools }} .
+          docker build -t python-arm64 --build-arg PYTHON_VERSION=${{ matrix.python-version }} .
           if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 
       - name: Smoke test Python image
+        if: ${{ !matrix.buildtools }}
         shell: pwsh
         run: |
           docker run --rm python-arm64 cmd /c "python -VV 2>&1 | findstr ARM64"
           if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
 
-      - name: Smoke test Build Tools
+      - name: Set up Python
+        if: matrix.buildtools
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: arm64
+
+      - name: Set up MSVC developer environment
+        if: matrix.buildtools
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Smoke test Python and Build Tools
         if: matrix.buildtools
         shell: pwsh
         run: |
-          docker run --rm python-arm64 cmd /c "where cl && cl 2>&1 | findstr ARM64"
-          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
+          & '${{ steps.setup-python.outputs.python-path }}' -VV 2>&1 | findstr ARM64
+          if ($LASTEXITCODE -ne 0) { throw "Python smoke test failed with exit code $LASTEXITCODE" }
+          $cl = (Get-Command cl).Source
+          Write-Host $cl
+          if ($cl -notmatch '\\HostARM64\\arm64\\') { throw "Expected native ARM64 cl.exe, got $cl" }
+          rustc -Vv
+          if ($LASTEXITCODE -ne 0) { throw "Rust smoke test failed with exit code $LASTEXITCODE" }
 
       - name: Test package installs
         shell: pwsh
         run: |
           ./scripts/Test-PackageInstalls.ps1 `
             -ColumnPrefix 'py${{ matrix.python-version }}${{ matrix.buildtools && '_buildtools' || '' }}' `
-            -Image python-arm64 `
-            -ListPath data\test-win_arm64${{ matrix.buildtools && '-buildtools' || '' }}.txt ${{ !matrix.buildtools && '-OnlyBinary' || '' }}
+            ${{ matrix.buildtools && format('-Python ''{0}''', steps.setup-python.outputs.python-path) || '-Image python-arm64 -OnlyBinary' }} `
+            -ListPath data\test-win_arm64${{ matrix.buildtools && '-buildtools' || '' }}.txt
 
       - name: Upload results
         uses: actions/upload-artifact@v7
