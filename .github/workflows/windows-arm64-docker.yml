@@ -5,6 +5,11 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      quick:
+        description: 'Quick mode: skip the package install tests and only publish the lists, reports and blocker TSV'
+        type: boolean
+        default: false
 
 jobs:
   fetch-package-lists:
@@ -43,6 +48,7 @@ jobs:
   test-package-installs:
     runs-on: windows-11-arm
     needs: fetch-package-lists
+    if: ${{ !inputs.quick }}
     strategy:
       fail-fast: false
       matrix:
@@ -119,13 +125,15 @@ jobs:
 
   consolidate-results:
     runs-on: ubuntu-latest
-    needs: test-package-installs
-    if: ${{ !cancelled() }}
+    needs: [fetch-package-lists, test-package-installs]
+    # Also runs when the tests were skipped in quick mode, or some of them failed.
+    if: ${{ !cancelled() && needs.fetch-package-lists.result == 'success' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Download result CSVs
+        if: ${{ !inputs.quick }}
         uses: actions/download-artifact@v8
         with:
           pattern: results-*
@@ -139,7 +147,7 @@ jobs:
           path: data
 
       - name: Combine install results with the blocker TSV
-        run: python scripts/consolidate_results.py --input results
+        run: python scripts/consolidate_results.py ${{ inputs.quick && '--no-results' || '--input results' }}
 
       - name: Upload combined TSV
         uses: actions/upload-artifact@v7

@@ -65,6 +65,32 @@ class ConsolidateTests(unittest.TestCase):
             ],
         )
 
+    def test_no_results_keeps_only_the_blocker_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blockers = os.path.join(directory, "package-blockers.tsv")
+            text = "Package\tPotential Blockers\nCore_Pkg\t\n\t\nclient\tCore_Pkg\n"
+            with open(blockers, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+            output = os.path.join(directory, "combined.tsv")
+            with patch(
+                "sys.argv",
+                ["consolidate", "--no-results", "--blockers", blockers, "--output", output],
+            ), contextlib.redirect_stdout(io.StringIO()):
+                consolidate_results.main()
+            with open(output, newline="", encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), text)
+
+    def test_blocker_columns_must_come_first(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blockers = os.path.join(directory, "package-blockers.tsv")
+            with open(blockers, "w", encoding="utf-8", newline="") as fh:
+                fh.write("Potential Blockers\tPackage\n\tpkg\n")
+            with patch(
+                "sys.argv", ["consolidate", "--no-results", "--blockers", blockers]
+            ), self.assertRaises(SystemExit) as raised:
+                consolidate_results.main()
+        self.assertIn("must start with the columns", str(raised.exception.code))
+
     def test_missing_results_are_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
             "sys.argv", ["consolidate", "--input", directory]

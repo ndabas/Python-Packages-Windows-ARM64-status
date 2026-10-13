@@ -20,7 +20,10 @@ Sheet access), `pypi.py` (PyPI lookups and wheel classification) and
 
 The GitHub workflow runs `fetch_package_status.py` and
 `report_package_blockers.py`, tests the package lists on each Python version,
-then publishes the combined TSV as the `consolidated-results` artifact.
+then publishes the combined TSV as the `consolidated-results` artifact. When run
+manually with **quick** checked, the install tests are skipped and the
+`consolidated-results` TSV holds only the `Package` and `Potential Blockers`
+columns, which line up with the first two columns of a full run's TSV.
 
 ## Package blocker report
 
@@ -79,12 +82,14 @@ python scripts\consolidate_results.py --input results
 ```
 
 The output has one line per line of `package-blockers.tsv`, and so one line per
-sheet row: `Package` and `Potential Blockers`, then the
-`<prefix>_install_status` and `<prefix>_binary_url` columns from each result
-file. Packages are matched on their PEP 503 normalized names, so duplicate rows
-all receive the results. Blank, comment and untested rows are left empty. Tested
-packages that are not in the TSV are printed as a warning. Use `--blockers` and
-`--output` to override the input TSV and output path.
+sheet row. `Package` and `Potential Blockers` are always the first two columns,
+followed by the `<prefix>_install_status` and `<prefix>_binary_url` columns from
+each result file. Packages are matched on their PEP 503 normalized names, so
+duplicate rows all receive the results. Blank, comment and untested rows are left
+empty. Tested packages that are not in the TSV are printed as a warning. Use
+`--no-results` instead of `--input` to write only the first two columns (as the
+workflow's quick mode does), and `--blockers` and `--output` to override the
+input TSV and output path.
 
 ## Tests
 
