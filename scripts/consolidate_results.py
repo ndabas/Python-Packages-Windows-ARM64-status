@@ -1,16 +1,35 @@
-"""Merge per-matrix-job result CSVs into the package status CSV, keyed on package name."""
+"""Combine per-matrix-job install results with the sheet-aligned blocker TSV.
+
+Writes a TSV with one line per line of package-blockers.tsv, and so one line per
+sheet row in sheet order: the blocker TSV's columns followed by every install
+result column. Packages are matched on their normalized names, so duplicate sheet
+rows all receive the results; blank, comment and untested rows are left empty.
+"""
 
 import argparse
 import csv
 import glob
 import os
+import sys
 from datetime import date
 
+from common import DATA_DIR, normalize_name
+from sheet import is_package_row
 
-def read_csv(path: str) -> tuple[list[str], list[dict[str, str]]]:
-    with open(path, newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        return list(reader.fieldnames or []), list(reader)
+
+def read_results(paths: list[str]) -> tuple[list[str], dict[str, dict[str, str]]]:
+    """Result columns in file order, and each package's results keyed by normalized name."""
+    columns: list[str] = []
+    results: dict[str, dict[str, str]] = {}
+    for path in paths:
+        # Export-Csv in Windows PowerShell writes a BOM.
+        with open(path, newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            columns += [c for c in reader.fieldnames or [] if c != "package" and c not in columns]
+            for row in reader:
+                values = {k: v for k, v in row.items() if k != "package"}
+                results.setdefault(normalize_name(row["package"]), {}).update(values)
+    return columns, results
 
 
 def main() -> None:
@@ -19,43 +38,51 @@ def main() -> None:
         "--input", default="results", help="Directory containing results-*.csv files"
     )
     parser.add_argument(
-        "--base",
-        default=os.path.join("data", "win_arm64-status.csv"),
-        help="Existing status CSV the results are merged into",
+        "--blockers",
+        default=os.path.join(DATA_DIR, "package-blockers.tsv"),
+        help="Sheet-aligned TSV written by report_package_blockers.py",
     )
     parser.add_argument(
-        "--output", help="Path of the merged CSV (default: <base>-<datestamp>.csv)"
+        "--output",
+        help="Path of the combined TSV (default: data/win_arm64-status-<datestamp>.tsv)",
     )
     args = parser.parse_args()
 
     paths = sorted(glob.glob(os.path.join(args.input, "*.csv")))
     if not paths:
         raise SystemExit(f"No CSV files found in {args.input}")
+    columns, results = read_results(paths)
 
-    cols, base_rows = read_csv(args.base)
-    rows = {row["package"]: dict(row) for row in base_rows}
+    with open(args.blockers, newline="", encoding="utf-8") as fh:
+        header, *rows = csv.reader(fh, delimiter="\t")
+    package_col = header.index("Package")
 
-    for path in paths:
-        fieldnames, result_rows = read_csv(path)
-        for col in fieldnames:
-            if col not in cols:
-                cols.append(col)
-        for row in result_rows:
-            package = row["package"]
-            rows.setdefault(package, {"package": package}).update(row)
-
-    if args.output:
-        output = args.output
-    else:
-        root, ext = os.path.splitext(args.base)
-        output = f"{root}-{date.today():%Y%m%d}{ext}"
-
+    output = args.output or os.path.join(DATA_DIR, f"win_arm64-status-{date.today():%Y%m%d}.tsv")
+    os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+    matched: set[str] = set()
     with open(output, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=cols, restval="")
-        writer.writeheader()
-        writer.writerows(rows.values())
+        writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        writer.writerow(header + columns)
+        for row in rows:
+            name = row[package_col] if package_col < len(row) else ""
+            key = normalize_name(name) if is_package_row(name) else ""
+            found = results.get(key, {})
+            if found:
+                matched.add(key)
+            row += [""] * (len(header) - len(row))
+            writer.writerow(row + [found.get(c, "") for c in columns])
 
-    print(f"Wrote {output} ({len(rows)} packages, {len(cols)} columns)")
+    unmatched = sorted(set(results) - matched)
+    if unmatched:
+        print(
+            f"Warning: {len(unmatched)} tested packages are not in {args.blockers}: "
+            + ", ".join(unmatched),
+            file=sys.stderr,
+        )
+    print(
+        f"Wrote {output} ({len(rows)} sheet rows, {len(matched)} of {len(results)} "
+        f"tested packages matched, {len(columns)} result columns)"
+    )
 
 
 if __name__ == "__main__":

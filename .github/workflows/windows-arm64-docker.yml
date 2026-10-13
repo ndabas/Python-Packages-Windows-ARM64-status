@@ -9,17 +9,30 @@ on:
 jobs:
   fetch-package-lists:
     runs-on: ubuntu-latest
+    env:
+      GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
+      GOOGLE_SHEET_NAME: ${{ secrets.GOOGLE_SHEET_NAME }}
+      GOOGLE_SHEET_GID: ${{ secrets.GOOGLE_SHEET_GID }}
+      GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ secrets.GOOGLE_SHEET_COL_PACKAGE_NAME }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: python -m pip install -r scripts/requirements.txt
+
       - name: Generate package lists from the Google Sheet
         env:
-          GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
-          GOOGLE_SHEET_NAME: ${{ secrets.GOOGLE_SHEET_NAME }}
-          GOOGLE_SHEET_COL_PACKAGE_NAME: ${{ secrets.GOOGLE_SHEET_COL_PACKAGE_NAME }}
           GH_TOKEN: ${{ github.token }}
         run: python scripts/fetch_package_status.py
+
+      - name: Report potential blockers for each sheet row
+        run: python scripts/report_package_blockers.py
 
       - name: Upload package lists
         uses: actions/upload-artifact@v7
@@ -125,11 +138,11 @@ jobs:
           name: package-lists
           path: data
 
-      - name: Consolidate CSVs
+      - name: Combine install results with the blocker TSV
         run: python scripts/consolidate_results.py --input results
 
-      - name: Upload consolidated CSV
+      - name: Upload combined TSV
         uses: actions/upload-artifact@v7
         with:
           name: consolidated-results
-          path: data/win_arm64-status-*.csv
+          path: data/win_arm64-status-*.tsv
