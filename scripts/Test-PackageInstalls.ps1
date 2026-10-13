@@ -108,8 +108,9 @@ try {
         $done++
         $pkgStart = Get-Date
 
-        if ($env:GITHUB_ACTIONS) { Write-Host "::group::pip install $pkg" }
-        else { Write-Host "===== pip install $pkg =====" }
+        $heading = "pip install $pkg ($done/$($packages.Count))"
+        if ($env:GITHUB_ACTIONS) { Write-Host "::group::$heading" }
+        else { Write-Host "===== $heading =====" }
 
         Remove-Item $reportPath -ErrorAction SilentlyContinue
         if ($useHost) {
