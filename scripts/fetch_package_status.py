@@ -15,19 +15,17 @@ test-win_arm64-buildtools.txt those with no status or "Needs PR". The GitHub CLI
 import argparse
 import os
 import re
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from common import DATA_DIR, ROOT, append_step_summary, write_text
-from github_cli import pr_refs, pull_request, require_gh, run
+from github_cli import pr_refs, pull_request, require_gh
 from pypi import TARGET_PLATFORM, WheelStatus, lookup, wheel_status
 from sheet import (
     STATUS_BUILDS_AVAILABLE,
     STATUS_NEEDS_PR,
     STATUS_PR_MERGED,
     STATUS_PR_UNDER_REVIEW,
-    TIMELINE_DONE,
     load_sheet,
 )
 
@@ -46,19 +44,6 @@ class PackageStatus:
 def check_package(package: str) -> PackageStatus:
     data, error = lookup(package)
     return PackageStatus(package, wheel_status(data) if data is not None else None, error)
-
-
-def repository_owner() -> str:
-    """Owner of the repository this script belongs to."""
-    slug = os.environ.get("GITHUB_REPOSITORY", "")
-    if "/" in slug:
-        return slug.split("/", 1)[0]
-    try:
-        url = run(["git", "remote", "get-url", "origin"]).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return ""
-    match = re.search(r"github\.com[:/]([^/\s]+)/", url)
-    return match.group(1) if match else ""
 
 
 def check_pull_requests(sheet_rows: list[dict[str, str]], column: str) -> dict[str, dict]:
@@ -86,11 +71,10 @@ def check_pull_requests(sheet_rows: list[dict[str, str]], column: str) -> dict[s
 def evaluate(
     sheet_row: dict[str, str],
     has_target_wheel: bool,
-    owner: str,
     cache: dict[str, dict],
     cols: dict[str, str],
 ) -> dict:
-    """Work out the status/timeline the sheet should show for one package."""
+    """Work out the status the sheet should show for one package."""
     # Rows with wheels on PyPI are settled, so their PRs are never looked up.
     prs = [cache[url] for url, *_ in pr_refs(sheet_row.get(cols["pr"], "")) if url in cache]
 
@@ -103,39 +87,28 @@ def evaluate(
     else:
         proposed = ""
 
-    timeline = TIMELINE_DONE if owner and any(
-        pr["author"].lower() == owner.lower() for pr in prs
-    ) else ""
-
     return {
         "package": sheet_row[cols["package"]],
         "current_status": sheet_row.get(cols["status"], ""),
         "proposed_status": proposed,
-        "current_timeline": sheet_row.get(cols["timeline"], ""),
-        "proposed_timeline": timeline,
         "prs": prs,
     }
 
 
 def render_report(
     results: list[dict],
-    owner: str,
     cols: dict[str, str],
     ignored: list[tuple[str, str]],
 ) -> str:
-    """Render the rows whose status or timeline differs from the sheet."""
+    """Render the rows whose status differs from the sheet."""
     changes = [
         r
         for r in results
-        if (r["proposed_status"] and r["proposed_status"] != r["current_status"])
-        or (r["proposed_timeline"] and r["proposed_timeline"] != r["current_timeline"])
+        if r["proposed_status"] and r["proposed_status"] != r["current_status"]
     ]
 
     lines = [
         "# Google Sheet update report",
-        "",
-        f"Repository owner used for the {cols['timeline']!r} check: "
-        f"{owner or '(unknown)'}",
         "",
         f"{len(changes)} of {len(results)} rows need updating. "
         "The sheet is not modified by this report.",
@@ -145,20 +118,10 @@ def render_report(
     if changes:
         lines += [
             f"| Package | {cols['status']} (sheet) | {cols['status']} (proposed) | "
-            f"{cols['timeline']} (sheet) | {cols['timeline']} (proposed) | Pull requests |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "Pull requests |",
+            "| --- | --- | --- | --- |",
         ]
         for row in changes:
-            status = (
-                row["proposed_status"]
-                if row["proposed_status"] != row["current_status"]
-                else "—"
-            )
-            timeline = (
-                row["proposed_timeline"]
-                if row["proposed_timeline"] != row["current_timeline"]
-                else "—"
-            )
             prs = "<br>".join(
                 f"[#{pr['url'].rsplit('/', 1)[1]}]({pr['url']}) "
                 f"({'merged' if pr['merged'] else pr['state']}"
@@ -166,8 +129,8 @@ def render_report(
                 for pr in row["prs"]
             )
             lines.append(
-                f"| {row['package']} | {row['current_status'] or '—'} | {status} | "
-                f"{row['current_timeline'] or '—'} | {timeline} | {prs or '—'} |"
+                f"| {row['package']} | {row['current_status'] or '—'} | "
+                f"{row['proposed_status']} | {prs or '—'} |"
             )
         lines.append("")
 
@@ -263,7 +226,6 @@ def main() -> None:
     if ignored:
         print(f"Skipped the PyPI lookup for {len(ignored)} packages; see the report")
 
-    owner = repository_owner()
     with_wheels = {s.package.lower() for s in statuses if s.has_target_wheel}
 
     def has_target_wheel(row: dict[str, str]) -> bool:
@@ -276,11 +238,11 @@ def main() -> None:
     )
     cache = check_pull_requests(unresolved, cols["pr"])
     results = [
-        evaluate(row, has_target_wheel(row), owner, cache, cols) for row in sheet_rows
+        evaluate(row, has_target_wheel(row), cache, cols) for row in sheet_rows
     ]
     write_package_lists(args.output_dir, statuses, results)
 
-    report = render_report(results, owner, cols, ignored)
+    report = render_report(results, cols, ignored)
     report_path = os.path.join(args.output_dir, args.report_name)
     write_text(report_path, report)
     print(f"Wrote {report_path} ({len(cache)} pull requests checked)")

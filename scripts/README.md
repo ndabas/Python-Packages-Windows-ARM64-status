@@ -14,7 +14,7 @@ to `data` by default.
 | `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` and `conda-packages.txt` into `win_arm64-status-<date>.tsv`. |
 | `get_consolidated_results.py` | Downloads `win_arm64-status-<date>.tsv` from the latest full workflow run, reordered to match the sheet. Requires `gh`. |
 | `my_contribs.py` | Writes `my-contribs.md`, a weekly summary of your Windows ARM64 PRs. Requires `gh`. |
-| `match_tracking_issue.py` | Writes `tracking-issue-report.md`, matching sheet PRs under review against a tracking issue. Requires `gh`. |
+| `match_tracking_issue.py` | Writes `tracking-issue-report.md`, matching sheet rows under review that link your PRs (the authenticated `gh` user, or `--author`) against a tracking issue. Requires `gh`. |
 
 Shared helpers live in `common.py` (paths, HTTP, output), `sheet.py` (Google
 Sheet access), `pypi.py` (PyPI lookups and wheel classification),

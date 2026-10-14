@@ -20,7 +20,6 @@ STATUS_BUILDS_AVAILABLE = "Builds Available"
 STATUS_NEEDS_PR = "Needs PR"
 STATUS_PR_UNDER_REVIEW = "PR Under Review"
 STATUS_PR_MERGED = "PR Merged"
-TIMELINE_DONE = "Done"
 
 
 def load_env(path: str) -> dict[str, str]:

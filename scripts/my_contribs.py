@@ -12,38 +12,12 @@ import os
 from datetime import date, datetime, timedelta
 
 from common import DATA_DIR, write_text
-from github_cli import gh, require_gh
+from github_cli import require_gh, search_issues
 from github_cli import pull_request as fetch_pull_request
 
 SEARCH_TERMS = "windows arm64"
 DEFAULT_AUTHOR = "ndabas"
 DEFAULT_SINCE = "2026-08-01"
-
-
-def search(query: str) -> list[dict]:
-    """Page through the issue search API and return every matching item."""
-    items: list[dict] = []
-    page = 1
-    while True:
-        data = gh(
-            "api",
-            "-X",
-            "GET",
-            "search/issues",
-            "-f",
-            f"q={query}",
-            "-F",
-            "per_page=100",
-            "-F",
-            f"page={page}",
-        )
-        assert isinstance(data, dict)
-        batch = data.get("items", [])
-        items.extend(batch)
-        # The search API caps out at 1000 results.
-        if len(batch) < 100 or len(items) >= min(data.get("total_count", 0), 1000):
-            return items
-        page += 1
 
 
 def week_start(timestamp: str) -> date:
@@ -98,7 +72,7 @@ def main() -> None:
     require_gh()
 
     base = f"is:pr author:{args.author} archived:false {SEARCH_TERMS}"
-    items = search(f"{base} created:>={args.since}")
+    items = search_issues(f"{base} created:>={args.since}")
     # The search API reports merged_at alongside each pull request.
     merged = [item for item in items if (item.get("pull_request") or {}).get("merged_at")]
     open_prs = [item for item in items if item.get("state") == "open"]
