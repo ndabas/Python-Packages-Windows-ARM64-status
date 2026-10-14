@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 
-from common import DATA_DIR, ROOT, normalize_name
+from common import DATA_DIR, ROOT, normalize_name, write_tsv
 from github_cli import gh, require_gh, run
 from sheet import is_package_row, load_sheet
 
@@ -117,8 +117,7 @@ def reorder_file(path: str, sheet_names: list[str]) -> None:
     if dropped:
         print(f"Warning: dropped, no longer in the sheet: {name_list(dropped)}", file=sys.stderr)
 
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        csv.writer(fh, delimiter="\t", lineterminator="\n").writerows(output)
+    write_tsv(path, output)
 
 
 def download(run_id: int, directory: str) -> list[str]:

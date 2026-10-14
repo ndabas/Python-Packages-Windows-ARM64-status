@@ -71,15 +71,18 @@ class ReorderTests(unittest.TestCase):
         self.assertEqual(dropped, ["gone"])
 
     def test_file_is_renamed_and_round_trips(self) -> None:
+        text = 'b\ta, c\t=HYPERLINK("https://x/b","Yes")\na\t\tNo\n'
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "win_arm64-status-20261014.tsv")
             with open(path, "w", newline="", encoding="utf-8") as fh:
-                fh.write('Package\tPotential Blockers\nb\t"has\ttab"\na\t\n')
+                fh.write("Package\tPotential Blockers\tAvailable on Conda\n" + text)
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 gcr.reorder_file(path, ["b", "a"])
             self.assertIn("already matches", out.getvalue())
             with open(path, newline="", encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), 'Package Name\tPotential Blockers\nb\t"has\ttab"\na\t\n')
+                self.assertEqual(
+                    fh.read(), "Package Name\tPotential Blockers\tAvailable on Conda\n" + text
+                )
 
     def test_unexpected_first_column_is_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -9,22 +9,39 @@ to `data` by default.
 | --- | --- |
 | `fetch_package_status.py` | Writes `sheet-update-report.md`, then `test-win_arm64.txt` and `test-win_arm64-buildtools.txt` from each package's updated status (proposed where the report has one, otherwise the sheet's). Requires `gh`. |
 | `report_package_blockers.py` | Writes `package-blockers.tsv` and `package-blocker-report.md`. Requires `packaging`. |
+| `fetch_conda_packages.py` | Writes `conda-packages.txt`, the packages in the Anaconda `pkgs/main` win-arm64 channel (see [Conda availability](#conda-availability)). |
 | `Test-PackageInstalls.ps1` | Installs each package from a list and writes `results-<prefix>.csv` and a Markdown log. |
-| `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` into `win_arm64-status-<date>.tsv`. |
+| `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` and `conda-packages.txt` into `win_arm64-status-<date>.tsv`. |
 | `get_consolidated_results.py` | Downloads `win_arm64-status-<date>.tsv` from the latest full workflow run, reordered to match the sheet. Requires `gh`. |
 | `my_contribs.py` | Writes `my-contribs.md`, a weekly summary of your Windows ARM64 PRs. Requires `gh`. |
 | `match_tracking_issue.py` | Writes `tracking-issue-report.md`, matching sheet PRs under review against a tracking issue. Requires `gh`. |
 
 Shared helpers live in `common.py` (paths, HTTP, output), `sheet.py` (Google
-Sheet access), `pypi.py` (PyPI lookups and wheel classification) and
-`github_cli.py` (`gh` wrappers).
+Sheet access), `pypi.py` (PyPI lookups and wheel classification),
+`conda_repo.py` (conda channel name matching) and `github_cli.py` (`gh` wrappers).
 
-The GitHub workflow runs `fetch_package_status.py` and
-`report_package_blockers.py`, tests the package lists on each Python version,
-then publishes the combined TSV as the `consolidated-results` artifact. When run
+The GitHub workflow runs `fetch_package_status.py`,
+`report_package_blockers.py` and `fetch_conda_packages.py`, tests the package
+lists on each Python version, then publishes the combined TSV as the
+`consolidated-results` artifact. When run
 manually with **quick** checked, the install tests are skipped and the
-`consolidated-results` TSV holds only the `Package Name` and `Potential Blockers`
-columns, which line up with the first two columns of a full run's TSV.
+`consolidated-results` TSV holds only the `Package Name`, `Potential Blockers`
+and `Available on Conda` columns, which line up with the first three columns of
+a full run's TSV.
+
+## Conda availability
+
+`fetch_conda_packages.py` downloads the Anaconda `pkgs/main` win-arm64
+[repodata.json](https://repo.anaconda.com/pkgs/main/win-arm64/repodata.json)
+and writes its distinct package names, one per line, to `conda-packages.txt`
+(`--output` overrides the path). It does not read the sheet, and stops if the
+repodata cannot be read or lists no packages.
+
+`consolidate_results.py` matches sheet packages against this list on their PEP
+503 normalized names, apart from a few well-known renames (for example `torch`
+is `pytorch`) listed in `CONDA_ALIASES` in `conda_repo.py`; an alias is used
+only when it is in the channel. Only the win-arm64 subdirectory is checked, not
+`noarch`.
 
 ## Package blocker report
 
@@ -82,14 +99,24 @@ python scripts\consolidate_results.py --input results
 ```
 
 The output has one line per line of `package-blockers.tsv`, and so one line per
-sheet row. `Package Name` and `Potential Blockers` are always the first two columns,
-followed by the `<prefix>_install_status` and `<prefix>_binary_url` columns from
-each result file. Packages are matched on their PEP 503 normalized names, so
-duplicate rows all receive the results. Blank, comment and untested rows are left
-empty. Tested packages that are not in the TSV are printed as a warning. Use
-`--no-results` instead of `--input` to write only the first two columns (as the
-workflow's quick mode does), and `--blockers` and `--output` to override the
-input TSV and output path.
+sheet row. `Package Name`, `Potential Blockers` and `Available on Conda` are
+always the first three columns, followed by the `<prefix>_install_status` and
+`<prefix>_binary_url` columns from each result file. Packages are matched on
+their PEP 503 normalized names, so duplicate rows all receive the results.
+Blank and comment rows are left empty, as are the result columns of untested
+rows. Tested packages that are not in
+the TSV are printed as a warning. Use `--no-results` instead of `--input` to
+write only the first three columns (as the workflow's quick mode does), and
+`--blockers`, `--conda` and `--output` to override the inputs and output
+path.
+
+`Available on Conda` is `Yes` or `No` for every package row. `Yes` is written as a
+formula, `=HYPERLINK("https://anaconda.org/anaconda/<name>","Yes")`, so pasting
+the TSV into Google Sheets shows a `Yes` link to the package page. The TSV is
+written with `csv.QUOTE_NONE`, as Sheets would paste a quoted formula as text;
+fields can therefore not contain tabs or newlines. Pass `--plain-conda` to write
+a plain `Yes` instead. `consolidate_results.py` stops if `conda-packages.txt` is
+missing.
 
 ## Fetching the latest results
 

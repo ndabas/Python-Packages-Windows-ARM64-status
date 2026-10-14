@@ -39,6 +39,9 @@ jobs:
       - name: Report potential blockers for each sheet row
         run: python scripts/report_package_blockers.py
 
+      - name: List packages in the conda win-arm64 channel
+        run: python scripts/fetch_conda_packages.py
+
       - name: Upload package lists
         uses: actions/upload-artifact@v7
         with:

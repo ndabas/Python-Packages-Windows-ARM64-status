@@ -1,5 +1,6 @@
 """Small helpers shared by the scripts in this directory."""
 
+import csv
 import os
 import re
 import urllib.request
@@ -18,6 +19,17 @@ def fetch(url: str) -> bytes:
 def normalize_name(name: str) -> str:
     """PEP 503 normalized package name."""
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def write_tsv(path: str, rows: list[list[str]]) -> None:
+    """Write rows as TSV without quoting, so formulas such as =HYPERLINK("...") paste
+    into Google Sheets intact; csv raises an error for fields containing tabs or newlines.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        csv.writer(
+            fh, delimiter="\t", lineterminator="\n", quoting=csv.QUOTE_NONE, quotechar=None
+        ).writerows(rows)
 
 
 def write_text(path: str, text: str) -> None:

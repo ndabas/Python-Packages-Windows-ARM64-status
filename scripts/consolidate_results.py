@@ -1,11 +1,15 @@
 """Combine per-matrix-job install results with the sheet-aligned blocker TSV.
 
 Writes a TSV with one line per line of package-blockers.tsv, and so one line per
-sheet row in sheet order. Package Name and Potential Blockers are always the first two
-columns, followed by every install result column, so a quick (--no-results) and
-a full TSV can be pasted into the same place in the sheet. Packages are matched
-on their normalized names, so duplicate sheet rows all receive the results;
-blank, comment and untested rows are left empty.
+sheet row in sheet order. Package Name, Potential Blockers and Available on Conda
+are always the first three columns, followed by every install result column, so
+a quick (--no-results) and a full TSV can be pasted into the same place in the
+sheet. Available on Conda is matched against the conda-packages.txt written by
+fetch_conda_packages.py: "Yes" is written as a Google Sheets HYPERLINK formula
+to the package's anaconda.org page (plain "Yes" with --plain-conda), "No" when
+it is absent. Packages are matched on their normalized names, so duplicate sheet
+rows all receive the results; blank and comment rows are left empty, as are the
+result columns of untested rows.
 """
 
 import argparse
@@ -15,10 +19,28 @@ import os
 import sys
 from datetime import date
 
-from common import DATA_DIR, normalize_name
+from common import DATA_DIR, normalize_name, write_tsv
+from conda_repo import (
+    CONDA_PACKAGES,
+    conda_name,
+    package_url,
+    read_conda_packages,
+    similar_names,
+)
 from sheet import is_package_row
 
 LEADING_COLUMNS = ["Package Name", "Potential Blockers"]
+CONDA_COLUMN = "Available on Conda"
+
+
+def conda_cell(name: str, available: dict[str, str], link: bool = True) -> str:
+    """Available on Conda value for a sheet package cell; blank for non-package rows."""
+    if not is_package_row(name):
+        return ""
+    found = conda_name(name, available)
+    if not found:
+        return "No"
+    return f'=HYPERLINK("{package_url(found)}","Yes")' if link else "Yes"
 
 
 def read_results(paths: list[str]) -> tuple[list[str], dict[str, dict[str, str]]]:
@@ -45,12 +67,22 @@ def main() -> None:
     source.add_argument(
         "--no-results",
         action="store_true",
-        help="Write only the blocker columns, e.g. when the install tests were skipped",
+        help="Write only the blocker and conda columns, e.g. when the install tests were skipped",
     )
     parser.add_argument(
         "--blockers",
         default=os.path.join(DATA_DIR, "package-blockers.tsv"),
         help="Sheet-aligned TSV written by report_package_blockers.py",
+    )
+    parser.add_argument(
+        "--conda",
+        default=os.path.join(DATA_DIR, CONDA_PACKAGES),
+        help="Conda package list written by fetch_conda_packages.py",
+    )
+    parser.add_argument(
+        "--plain-conda",
+        action="store_true",
+        help="Write Available on Conda as plain Yes/No instead of Yes hyperlink formulas",
     )
     parser.add_argument(
         "--output",
@@ -72,22 +104,39 @@ def main() -> None:
         raise SystemExit(
             f"{args.blockers} must start with the columns {LEADING_COLUMNS}; found {header}"
         )
+    if not os.path.isfile(args.conda):
+        raise SystemExit(f"{args.conda} not found; run fetch_conda_packages.py first")
+    conda = read_conda_packages(args.conda)
+    width = len(LEADING_COLUMNS)
 
     output = args.output or os.path.join(DATA_DIR, f"win_arm64-status-{date.today():%Y%m%d}.tsv")
-    os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
     matched: set[str] = set()
-    with open(output, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        writer.writerow(header + columns)
-        for row in rows:
-            name = row[0] if row else ""
-            key = normalize_name(name) if is_package_row(name) else ""
-            found = results.get(key, {})
-            if found:
-                matched.add(key)
-            row += [""] * (len(header) - len(row))
-            writer.writerow(row + [found.get(c, "") for c in columns])
+    # Packages missing from conda, by normalized name, with conda names that may be them.
+    similar: dict[str, tuple[str, list[str]]] = {}
+    lines = [header[:width] + [CONDA_COLUMN] + header[width:] + columns]
+    for row in rows:
+        name = row[0] if row else ""
+        key = normalize_name(name) if is_package_row(name) else ""
+        found = results.get(key, {})
+        if found:
+            matched.add(key)
+        if key and key not in similar and not conda_name(name, conda):
+            similar[key] = (name, similar_names(name, conda))
+        row = row + [""] * (len(header) - len(row))
+        cell = conda_cell(name, conda, link=not args.plain_conda)
+        lines.append(row[:width] + [cell] + row[width:] + [found.get(c, "") for c in columns])
+    write_tsv(output, lines)
 
+    candidates = [(name, names) for name, names in similar.values() if names]
+    if candidates:
+        print(
+            f"Warning: {len(candidates)} packages are not on conda under their own name, "
+            "but conda packages with a similar name are; add any that are the same "
+            "package to CONDA_ALIASES in conda_repo.py:\n"
+            + "".join(f"  {name}: {', '.join(names)}\n" for name, names in candidates),
+            end="",
+            file=sys.stderr,
+        )
     unmatched = sorted(set(results) - matched)
     if unmatched:
         print(
