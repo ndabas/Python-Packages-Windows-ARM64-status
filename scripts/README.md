@@ -23,8 +23,9 @@ Sheet access), `pypi.py` (PyPI lookups and wheel classification),
 The GitHub workflow runs `fetch_package_status.py`,
 `report_package_blockers.py` and `fetch_conda_packages.py`, tests the package
 lists on each Python version, then publishes the combined TSV as the
-`consolidated-results` artifact. When run
-manually with **quick** checked, the install tests are skipped and the
+`consolidated-results` artifact. The full run happens daily at 04:00 UK time
+and when run manually. Pushes and pull requests, and manual runs with
+**quick** checked, skip the install tests, so the
 `consolidated-results` TSV holds only the `Package Name`, `Potential Blockers`
 and `Available on Conda` columns, which line up with the first three columns of
 a full run's TSV.
