@@ -32,7 +32,7 @@ class ConsolidateTests(unittest.TestCase):
             blockers = os.path.join(directory, "package-blockers.tsv")
             with open(blockers, "w", encoding="utf-8", newline="") as fh:
                 fh.write(
-                    "Package\tPotential Blockers\n"
+                    "Package Name\tPotential Blockers\n"
                     "Core_Pkg\t\n\t\ncore.pkg\t\n# Section\t\nclient\tCore_Pkg\nuntested\t\n"
                 )
             output = os.path.join(directory, "combined.tsv")
@@ -52,7 +52,7 @@ class ConsolidateTests(unittest.TestCase):
             rows,
             [
                 [
-                    "Package", "Potential Blockers",
+                    "Package Name", "Potential Blockers",
                     "py3.14_install_status", "py3.14_binary_url",
                     "py3.14_buildtools_install_status", "py3.14_buildtools_binary_url",
                 ],
@@ -68,7 +68,7 @@ class ConsolidateTests(unittest.TestCase):
     def test_no_results_keeps_only_the_blocker_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             blockers = os.path.join(directory, "package-blockers.tsv")
-            text = "Package\tPotential Blockers\nCore_Pkg\t\n\t\nclient\tCore_Pkg\n"
+            text = "Package Name\tPotential Blockers\nCore_Pkg\t\n\t\nclient\tCore_Pkg\n"
             with open(blockers, "w", encoding="utf-8", newline="") as fh:
                 fh.write(text)
             output = os.path.join(directory, "combined.tsv")
@@ -84,7 +84,7 @@ class ConsolidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             blockers = os.path.join(directory, "package-blockers.tsv")
             with open(blockers, "w", encoding="utf-8", newline="") as fh:
-                fh.write("Potential Blockers\tPackage\n\tpkg\n")
+                fh.write("Potential Blockers\tPackage Name\n\tpkg\n")
             with patch(
                 "sys.argv", ["consolidate", "--no-results", "--blockers", blockers]
             ), self.assertRaises(SystemExit) as raised:

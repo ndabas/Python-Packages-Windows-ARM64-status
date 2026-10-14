@@ -290,7 +290,7 @@ class OutputTests(unittest.TestCase):
                 self.assertEqual(
                     list(csv.reader(fh, delimiter="\t")),
                     [
-                        ["Package", "Potential Blockers"],
+                        ["Package Name", "Potential Blockers"],
                         ["Core_Pkg", ""], ["", ""], ["core.pkg", ""], ["# Section", ""],
                         ["client", "Core_Pkg"], ["missing", ""],
                     ],
@@ -316,7 +316,7 @@ class OutputTests(unittest.TestCase):
         ):
             report.write_outputs(directory, [], [])
             with open(os.path.join(directory, "package-blockers.tsv"), encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), "Package\tPotential Blockers\n")
+                self.assertEqual(fh.read(), "Package Name\tPotential Blockers\n")
             self.assertIn("No blockers identified", report.render_report([], [], "now"))
 
     def test_invalid_jobs_rejected_before_loading_sheet(self) -> None:

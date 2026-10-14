@@ -226,7 +226,8 @@ def write_blockers_tsv(
         sheet_names = [p.package for p in packages]
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        writer.writerow(["Package", "Potential Blockers"])
+        # Not "Package", so pasting the TSV doesn't duplicate the sheet's own column name.
+        writer.writerow(["Package Name", "Potential Blockers"])
         for name in sheet_names:
             found = upstream.get(normalize_name(name), []) if is_package_row(name) else []
             writer.writerow([name, ", ".join(found)])

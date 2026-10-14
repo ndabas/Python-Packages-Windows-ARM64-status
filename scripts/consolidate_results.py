@@ -1,7 +1,7 @@
 """Combine per-matrix-job install results with the sheet-aligned blocker TSV.
 
 Writes a TSV with one line per line of package-blockers.tsv, and so one line per
-sheet row in sheet order. Package and Potential Blockers are always the first two
+sheet row in sheet order. Package Name and Potential Blockers are always the first two
 columns, followed by every install result column, so a quick (--no-results) and
 a full TSV can be pasted into the same place in the sheet. Packages are matched
 on their normalized names, so duplicate sheet rows all receive the results;
@@ -18,7 +18,7 @@ from datetime import date
 from common import DATA_DIR, normalize_name
 from sheet import is_package_row
 
-LEADING_COLUMNS = ["Package", "Potential Blockers"]
+LEADING_COLUMNS = ["Package Name", "Potential Blockers"]
 
 
 def read_results(paths: list[str]) -> tuple[list[str], dict[str, dict[str, str]]]:
