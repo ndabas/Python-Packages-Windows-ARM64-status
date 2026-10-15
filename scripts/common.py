@@ -8,6 +8,9 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
 USER_AGENT = "Python-Packages-Windows-ARM64-status/1.0"
+# Written by fetch_package_status.py and read by consolidate_results.py.
+OPEN_PR_DATES = "open-pr-dates.tsv"
+PR_OPENED_COLUMN = "PR Opened"
 
 
 def fetch(url: str) -> bytes:

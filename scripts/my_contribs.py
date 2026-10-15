@@ -4,15 +4,18 @@ Uses the GitHub CLI (`gh`) to search for the author's PRs, groups them into ISO
 weeks by creation date (opened) and merge date (merged), and writes a markdown
 report. Merged PRs whose head repository still exists under the author's account
 are listed as forks that still need deleting, and open PRs that no longer merge
-cleanly are listed as needing a rebase.
+cleanly are listed as needing a rebase. Merged PRs that other people have
+commented on since the merge are listed, and their comments written to a second
+markdown file.
 """
 
 import argparse
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from common import DATA_DIR, write_text
-from github_cli import require_gh, search_issues
+from github_cli import gh_list, require_gh, search_issues
 from github_cli import pull_request as fetch_pull_request
 
 SEARCH_TERMS = "windows arm64"
@@ -20,10 +23,31 @@ DEFAULT_AUTHOR = "ndabas"
 DEFAULT_SINCE = "2026-08-01"
 
 
+@dataclass
+class Comment:
+    author: str
+    created_at: datetime
+    url: str
+    body: str
+    kind: str
+
+
+def parse_time(timestamp: str) -> datetime:
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
 def week_start(timestamp: str) -> date:
     """Monday of the ISO week the timestamp falls in."""
-    day = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
+    day = parse_time(timestamp).date()
     return day - timedelta(days=day.weekday())
+
+
+def pr_label(item: dict) -> str:
+    return f"{repo_slug(item)}#{item['number']}"
+
+
+def table_cell(text: str) -> str:
+    return " ".join(text.split()).replace("|", "\\|")
 
 
 def repo_slug(item: dict) -> str:
@@ -62,11 +86,94 @@ def conflict_state(item: dict, index: int, total: int) -> str:
     return conflicted
 
 
+def post_merge_comments(item: dict, author: str, index: int, total: int) -> list[Comment]:
+    """Comments, review comments and reviews by others made after the PR merged."""
+    slug = repo_slug(item)
+    number = item["number"]
+    merged_at = parse_time(item["pull_request"]["merged_at"])
+    sources = (
+        ("comment", f"repos/{slug}/issues/{number}/comments", "created_at"),
+        ("review comment", f"repos/{slug}/pulls/{number}/comments", "created_at"),
+        ("review", f"repos/{slug}/pulls/{number}/reviews", "submitted_at"),
+    )
+    comments: list[Comment] = []
+    for kind, path, time_field in sources:
+        for entry in gh_list(path):
+            login = (entry.get("user") or {}).get("login", "")
+            body = (entry.get("body") or "").strip()
+            timestamp = entry.get(time_field)
+            # Reviews holding only inline comments have an empty body of their own.
+            if not timestamp or not body or login.lower() == author.lower():
+                continue
+            created_at = parse_time(timestamp)
+            if created_at > merged_at:
+                if kind == "review comment" and entry.get("path"):
+                    kind_label = f"review comment on `{entry['path']}`"
+                else:
+                    kind_label = kind
+                comments.append(
+                    Comment(login, created_at, entry.get("html_url", ""), body, kind_label)
+                )
+    comments.sort(key=lambda comment: comment.created_at)
+    count = f"{len(comments)} comment{'s' if len(comments) != 1 else ''}"
+    print(f"[{index}/{total}] {slug}#{number}: {count} after merge", flush=True)
+    return comments
+
+
+def latest_activity_first(
+    commented: list[tuple[dict, list[Comment]]],
+) -> list[tuple[dict, list[Comment]]]:
+    """PRs ordered by their newest comment, most recent first."""
+    return sorted(
+        commented,
+        key=lambda pair: (
+            -max(c.created_at for c in pair[1]).timestamp(),
+            pr_label(pair[0]).lower(),
+        ),
+    )
+
+
+def render_comments_report(
+    author: str, commented: list[tuple[dict, list[Comment]]]
+) -> str:
+    lines = [
+        f"# Comments on {author}'s merged {SEARCH_TERMS} pull requests after merging",
+        "",
+        f"{len(commented)} merged pull requests have comments from others since they "
+        "were merged, most recent activity first.",
+        "",
+    ]
+    for item, comments in latest_activity_first(commented):
+        merged_at = parse_time(item["pull_request"]["merged_at"])
+        latest = max(c.created_at for c in comments)
+        lines += [
+            f"## [{pr_label(item)}]({item['html_url']}): {table_cell(item.get('title', ''))}",
+            "",
+            f"Merged {merged_at:%Y-%m-%d %H:%M} UTC; latest comment "
+            f"{latest:%Y-%m-%d %H:%M} UTC.",
+            "",
+        ]
+        for comment in comments:
+            lines += [
+                f"### @{comment.author}, {comment.created_at:%Y-%m-%d %H:%M} UTC "
+                f"([{comment.kind}]({comment.url}))",
+                "",
+            ]
+            lines += [f"> {line}".rstrip() for line in comment.body.splitlines()]
+            lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--author", default=DEFAULT_AUTHOR)
     parser.add_argument("--since", default=DEFAULT_SINCE, help="YYYY-MM-DD cut-off")
     parser.add_argument("--output", default=os.path.join(DATA_DIR, "my-contribs.md"))
+    parser.add_argument(
+        "--comments-output",
+        default=os.path.join(DATA_DIR, "my-contribs-post-merge-comments.md"),
+        help="Where to write comments made on merged pull requests after merging",
+    )
     args = parser.parse_args()
 
     require_gh()
@@ -112,6 +219,14 @@ def main() -> None:
                 (f"{repo_slug(item)}#{item['number']}", item["html_url"], state)
             )
 
+    print(f"Checking {len(merged)} merged pull requests for comments after merging")
+    commented: list[tuple[dict, list[Comment]]] = []
+    for index, item in enumerate(merged, start=1):
+        comments = post_merge_comments(item, args.author, index, len(merged))
+        if comments:
+            commented.append((item, comments))
+    commented = latest_activity_first(commented)
+
     lines = [
         f"# {args.author}'s {SEARCH_TERMS} pull requests since {args.since}",
         "",
@@ -135,6 +250,24 @@ def main() -> None:
         lines.append("None - every open pull request still merges cleanly.")
     lines += [
         "",
+        "## Merged pull requests with comments after merging",
+        "",
+    ]
+    if commented:
+        link = os.path.relpath(
+            args.comments_output, os.path.dirname(os.path.abspath(args.output))
+        ).replace(os.sep, "/")
+        lines += [f"See [{os.path.basename(args.comments_output)}]({link}).", ""]
+        lines += [
+            f"- [{pr_label(item)}]({item['html_url']}) "
+            f"({len(comments)} comment{'s' if len(comments) != 1 else ''}, latest "
+            f"{max(c.created_at for c in comments):%Y-%m-%d})"
+            for item, comments in commented
+        ]
+    else:
+        lines.append("None - nobody else has commented on a merged pull request after merging.")
+    lines += [
+        "",
         "## Forks still to delete",
         "",
     ]
@@ -149,6 +282,13 @@ def main() -> None:
 
     report = "\n".join(lines)
     write_text(args.output, report)
+    if commented:
+        write_text(args.comments_output, render_comments_report(args.author, commented))
+        print(f"Wrote {args.comments_output} ({len(commented)} pull requests)")
+    elif os.path.exists(args.comments_output):
+        # Don't leave comments from an earlier run looking current.
+        os.remove(args.comments_output)
+        print(f"Removed {args.comments_output}; no comments after merging")
     print(
         f"Wrote {args.output} ({len(weeks)} weeks, {len(forks)} forks to delete, "
         f"{len(conflicts)} conflicting open pull requests)"

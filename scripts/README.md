@@ -7,13 +7,13 @@ to `data` by default.
 
 | Script | Purpose |
 | --- | --- |
-| `fetch_package_status.py` | Writes `sheet-update-report.md`, then `test-win_arm64.txt` and `test-win_arm64-buildtools.txt` from each package's updated status (proposed where the report has one, otherwise the sheet's). An open linked PR proposes `PR Under Review` even when `win_arm64` wheels are already available (for example, a follow-up PR adding CUDA support); such packages are still install-tested. Requires `gh`. |
+| `fetch_package_status.py` | Writes `sheet-update-report.md`, then `test-win_arm64.txt` and `test-win_arm64-buildtools.txt` from each package's updated status (proposed where the report has one, otherwise the sheet's). An open linked PR proposes `PR Under Review` even when `win_arm64` wheels are already available (for example, a follow-up PR adding CUDA support); such packages are still install-tested. Also writes `open-pr-dates.tsv`, the date the newest open linked PR of each package was opened, for the consolidated TSV. Requires `gh`. |
 | `report_package_blockers.py` | Writes `package-blockers.tsv` and `package-blocker-report.md`. Requires `packaging`. |
 | `fetch_conda_packages.py` | Writes `conda-packages.txt`, the packages in the Anaconda `pkgs/main` win-arm64 channel (see [Conda availability](#conda-availability)). |
 | `Test-PackageInstalls.ps1` | Installs each package from a list and writes `results-<prefix>.csv` and a Markdown log. |
 | `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` and `conda-packages.txt` into `win_arm64-status-<date>.tsv`. |
 | `get_consolidated_results.py` | Downloads `win_arm64-status-<date>.tsv` from the latest full workflow run, reordered to match the sheet. Requires `gh`. |
-| `my_contribs.py` | Writes `my-contribs.md`, a weekly summary of your Windows ARM64 PRs. Requires `gh`. |
+| `my_contribs.py` | Writes `my-contribs.md`, a weekly summary of your Windows ARM64 PRs, with open PRs that conflict. Merged PRs that others have commented on after merging (your own comments are ignored) are listed there, with the comments written to `my-contribs-post-merge-comments.md` (`--comments-output`), PRs with the most recent comment first; that file is removed when there are none. Requires `gh`. |
 | `match_tracking_issue.py` | Writes `tracking-issue-report.md`, matching sheet rows under review that link your PRs (the authenticated `gh` user, or `--author`) against a tracking issue. Requires `gh`. |
 
 Shared helpers live in `common.py` (paths, HTTP, output), `sheet.py` (Google
@@ -26,8 +26,9 @@ lists on each Python version, then publishes the combined TSV as the
 `consolidated-results` artifact. The full run happens daily at 04:00 UK time
 and when run manually. Pushes and pull requests, and manual runs with
 **quick** checked, skip the install tests, so the
-`consolidated-results` TSV holds only the `Package Name`, `Potential Blockers`
-and `Available on Conda` columns, which line up with the first three columns of
+`consolidated-results` TSV holds only the `Package Name`, `PR Opened`,
+`Potential Blockers` and `Available on Conda` columns, which line up with the
+first four columns of
 a full run's TSV.
 
 ## Conda availability
@@ -100,16 +101,23 @@ python scripts\consolidate_results.py --input results
 ```
 
 The output has one line per line of `package-blockers.tsv`, and so one line per
-sheet row. `Package Name`, `Potential Blockers` and `Available on Conda` are
-always the first three columns, followed by the `<prefix>_install_status` and
+sheet row. `Package Name`, `PR Opened`, `Potential Blockers` and
+`Available on Conda` are always the first four columns, followed by the
+`<prefix>_install_status` and
 `<prefix>_binary_url` columns from each result file. Packages are matched on
 their PEP 503 normalized names, so duplicate rows all receive the results.
 Blank and comment rows are left empty, as are the result columns of untested
 rows. Tested packages that are not in
 the TSV are printed as a warning. Use `--no-results` instead of `--input` to
-write only the first three columns (as the workflow's quick mode does), and
-`--blockers`, `--conda` and `--output` to override the inputs and output
-path.
+write only the first four columns (as the workflow's quick mode does), and
+`--blockers`, `--conda`, `--pr-dates` and `--output` to override the inputs and
+output path.
+
+`PR Opened` is the date (`YYYY-MM-DD`, UTC) the package's newest open linked PR
+was opened, taken from `open-pr-dates.tsv`, which `fetch_package_status.py`
+writes for every sheet package with at least one open PR. Only open PRs count;
+the column is blank when the package has no linked PRs or none of them is open.
+`consolidate_results.py` stops if `open-pr-dates.tsv` is missing.
 
 `Available on Conda` is `Yes` or `No` for every package row. `Yes` is written as a
 formula, `=HYPERLINK("https://anaconda.org/anaconda/<name>","Yes")`, so pasting

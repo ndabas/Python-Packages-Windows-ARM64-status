@@ -1,15 +1,17 @@
 """Combine per-matrix-job install results with the sheet-aligned blocker TSV.
 
 Writes a TSV with one line per line of package-blockers.tsv, and so one line per
-sheet row in sheet order. Package Name, Potential Blockers and Available on Conda
-are always the first three columns, followed by every install result column, so
-a quick (--no-results) and a full TSV can be pasted into the same place in the
-sheet. Available on Conda is matched against the conda-packages.txt written by
-fetch_conda_packages.py: "Yes" is written as a Google Sheets HYPERLINK formula
-to the package's anaconda.org page (plain "Yes" with --plain-conda), "No" when
-it is absent. Packages are matched on their normalized names, so duplicate sheet
-rows all receive the results; blank and comment rows are left empty, as are the
-result columns of untested rows.
+sheet row in sheet order. Package Name, PR Opened, Potential Blockers and
+Available on Conda are always the first four columns, followed by every install
+result column, so a quick (--no-results) and a full TSV can be pasted into the
+same place in the sheet. PR Opened is the date the newest open linked PR was
+opened, from the open-pr-dates.tsv written by fetch_package_status.py, and is
+blank when no linked PR is open. Available on Conda is matched against the
+conda-packages.txt written by fetch_conda_packages.py: "Yes" is written as a
+Google Sheets HYPERLINK formula to the package's anaconda.org page (plain "Yes"
+with --plain-conda), "No" when it is absent. Packages are matched on their
+normalized names, so duplicate sheet rows all receive the results; blank and
+comment rows are left empty, as are the result columns of untested rows.
 """
 
 import argparse
@@ -19,7 +21,7 @@ import os
 import sys
 from datetime import date
 
-from common import DATA_DIR, normalize_name, write_tsv
+from common import DATA_DIR, OPEN_PR_DATES, PR_OPENED_COLUMN, normalize_name, write_tsv
 from conda_repo import (
     CONDA_PACKAGES,
     conda_name,
@@ -41,6 +43,13 @@ def conda_cell(name: str, available: dict[str, str], link: bool = True) -> str:
     if not found:
         return "No"
     return f'=HYPERLINK("{package_url(found)}","Yes")' if link else "Yes"
+
+
+def read_pr_dates(path: str) -> dict[str, str]:
+    """PR Opened dates keyed by normalized package name."""
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh, delimiter="\t"))[1:]
+    return {normalize_name(row[0]): row[1] for row in rows if len(row) >= 2 and row[0]}
 
 
 def read_results(paths: list[str]) -> tuple[list[str], dict[str, dict[str, str]]]:
@@ -80,6 +89,11 @@ def main() -> None:
         help="Conda package list written by fetch_conda_packages.py",
     )
     parser.add_argument(
+        "--pr-dates",
+        default=os.path.join(DATA_DIR, OPEN_PR_DATES),
+        help="Open pull request dates written by fetch_package_status.py",
+    )
+    parser.add_argument(
         "--plain-conda",
         action="store_true",
         help="Write Available on Conda as plain Yes/No instead of Yes hyperlink formulas",
@@ -107,13 +121,19 @@ def main() -> None:
     if not os.path.isfile(args.conda):
         raise SystemExit(f"{args.conda} not found; run fetch_conda_packages.py first")
     conda = read_conda_packages(args.conda)
+    if not os.path.isfile(args.pr_dates):
+        raise SystemExit(f"{args.pr_dates} not found; run fetch_package_status.py first")
+    pr_dates = read_pr_dates(args.pr_dates)
     width = len(LEADING_COLUMNS)
 
     output = args.output or os.path.join(DATA_DIR, f"win_arm64-status-{date.today():%Y%m%d}.tsv")
     matched: set[str] = set()
     # Packages missing from conda, by normalized name, with conda names that may be them.
     similar: dict[str, tuple[str, list[str]]] = {}
-    lines = [header[:width] + [CONDA_COLUMN] + header[width:] + columns]
+    lines = [
+        header[:1] + [PR_OPENED_COLUMN] + header[1:width] + [CONDA_COLUMN]
+        + header[width:] + columns
+    ]
     for row in rows:
         name = row[0] if row else ""
         key = normalize_name(name) if is_package_row(name) else ""
@@ -124,7 +144,10 @@ def main() -> None:
             similar[key] = (name, similar_names(name, conda))
         row = row + [""] * (len(header) - len(row))
         cell = conda_cell(name, conda, link=not args.plain_conda)
-        lines.append(row[:width] + [cell] + row[width:] + [found.get(c, "") for c in columns])
+        lines.append(
+            row[:1] + [pr_dates.get(key, "") if key else ""] + row[1:width] + [cell]
+            + row[width:] + [found.get(c, "") for c in columns]
+        )
     write_tsv(output, lines)
 
     candidates = [(name, names) for name, names in similar.values() if names]

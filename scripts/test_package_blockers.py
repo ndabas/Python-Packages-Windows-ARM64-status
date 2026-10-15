@@ -267,6 +267,32 @@ class SharedClassificationTests(unittest.TestCase):
             with open(path, encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "")
 
+    def test_status_script_open_pr_dates_use_the_newest_open_pr(self) -> None:
+        cols = {"package": "Package", "pr": "PR"}
+        urls = [f"https://github.com/o/r/pull/{n}" for n in range(1, 5)]
+
+        def pr(url: str, state: str, created_at: str) -> dict:
+            return {"url": url, "state": state, "merged": False, "author": "",
+                    "created_at": created_at}
+
+        cache = {
+            urls[0]: pr(urls[0], "open", "2026-08-01T10:00:00Z"),
+            urls[1]: pr(urls[1], "open", "2026-09-18T23:30:00Z"),
+            urls[2]: pr(urls[2], "closed", "2026-10-01T00:00:00Z"),
+            urls[3]: pr(urls[3], "closed", "2026-07-01T00:00:00Z"),
+        }
+        rows = [
+            {"Package": "multi", "PR": f"{urls[0]} {urls[2]}\n{urls[1]}"},
+            {"Package": "closed-only", "PR": urls[3]},
+            {"Package": "no-pr", "PR": ""},
+            {"Package": "Dup_Name", "PR": urls[0]},
+            {"Package": "dup-name", "PR": urls[1]},
+        ]
+        self.assertEqual(
+            fetch_package_status.open_pr_dates(rows, cache, cols),
+            [("multi", "2026-09-18"), ("Dup_Name", "2026-09-18")],
+        )
+
     def test_read_sheet_filters_unless_keep_all(self) -> None:
         text = "Name,Other\nA,1\n,2\n# note,3\na,4\nB,5\n".encode()
         with patch.object(sheet, "fetch", return_value=text), patch.object(

@@ -10,7 +10,9 @@ proposed status where the report has one, otherwise the sheet's):
 test-win_arm64.txt holds the packages whose status is "Builds Available" or that
 have win_arm64 wheels, and test-win_arm64-buildtools.txt those with no status or
 "Needs PR". An open linked PR proposes "PR Under Review" even when wheels are
-already available (e.g. a follow-up PR adding CUDA support). The GitHub CLI
+already available (e.g. a follow-up PR adding CUDA support). Finally it writes
+open-pr-dates.tsv with, for each package with an open linked PR, the date the
+newest open PR was opened, for consolidate_results.py. The GitHub CLI
 (`gh`) is required for the pull request lookups.
 """
 
@@ -20,7 +22,16 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from common import DATA_DIR, ROOT, append_step_summary, write_text
+from common import (
+    DATA_DIR,
+    OPEN_PR_DATES,
+    PR_OPENED_COLUMN,
+    ROOT,
+    append_step_summary,
+    normalize_name,
+    write_text,
+    write_tsv,
+)
 from github_cli import pr_refs, pull_request, require_gh
 from pypi import TARGET_PLATFORM, WheelStatus, lookup, wheel_status
 from sheet import (
@@ -63,11 +74,37 @@ def check_pull_requests(sheet_rows: list[dict[str, str]], column: str) -> dict[s
             "state": data.get("state", ""),
             "merged": bool(data.get("merged_at")),
             "author": (data.get("user") or {}).get("login", ""),
+            "created_at": data.get("created_at") or "",
         }
         cache[url] = entry
         state = "merged" if entry["merged"] else entry["state"]
         print(f"[{index}/{len(refs)}] {url}: {state}", flush=True)
     return cache
+
+
+def open_pr_dates(
+    sheet_rows: list[dict[str, str]], cache: dict[str, dict], cols: dict[str, str]
+) -> list[tuple[str, str]]:
+    """(package, YYYY-MM-DD) for each package whose linked PRs include an open one.
+
+    The date is when the most recently opened of its open PRs was created.
+    """
+    dates: dict[str, tuple[str, str]] = {}
+    for row in sheet_rows:
+        name = row[cols["package"]]
+        opened = [
+            cache[url]["created_at"]
+            for url, *_ in pr_refs(row.get(cols["pr"], ""))
+            if url in cache and cache[url]["state"] == "open" and cache[url]["created_at"]
+        ]
+        if not opened:
+            continue
+        # ISO 8601 UTC timestamps from the API sort chronologically as strings.
+        latest = max(opened)[:10]
+        key = normalize_name(name)
+        if key not in dates or latest > dates[key][1]:
+            dates[key] = (dates.get(key, (name, ""))[0], latest)
+    return list(dates.values())
 
 
 def evaluate(
@@ -251,6 +288,11 @@ def main() -> None:
     write_text(report_path, report)
     print(f"Wrote {report_path} ({len(cache)} pull requests checked)")
     append_step_summary(report)
+
+    dates = open_pr_dates(sheet_rows, cache, cols)
+    dates_path = os.path.join(args.output_dir, OPEN_PR_DATES)
+    write_tsv(dates_path, [["Package Name", PR_OPENED_COLUMN], *map(list, dates)])
+    print(f"Wrote {dates_path} ({len(dates)} packages with open pull requests)")
 
     if any(s.error for s in statuses):
         raise SystemExit("Some packages could not be queried; see the errors above.")

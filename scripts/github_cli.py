@@ -36,6 +36,13 @@ def gh(*args: str) -> dict | list:
     return json.loads(result.stdout)
 
 
+def gh_list(path: str) -> list[dict]:
+    """Fetch every page of a REST endpoint that returns a JSON array."""
+    pages = gh("api", "--paginate", "--slurp", path)
+    assert isinstance(pages, list)
+    return [item for page in pages for item in page]
+
+
 def pull_request(repo: str, number: str | int) -> dict:
     """Fetch a pull request; repo is an owner/name slug."""
     data = gh("api", f"repos/{repo}/pulls/{number}")

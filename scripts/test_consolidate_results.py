@@ -24,6 +24,13 @@ def write_conda(directory: str) -> str:
     return path
 
 
+def write_pr_dates(directory: str, text: str = "Package Name\tPR Opened\n") -> str:
+    path = os.path.join(directory, "open-pr-dates.tsv")
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    return path
+
+
 class ConsolidateTests(unittest.TestCase):
     def test_results_are_aligned_with_every_sheet_row(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -49,10 +56,13 @@ class ConsolidateTests(unittest.TestCase):
                     "Core_Pkg\t\n\t\ncore.pkg\t\n# Section\t\nclient\tCore_Pkg\nuntested\t\n"
                 )
             conda = write_conda(directory)
+            pr_dates = write_pr_dates(
+                directory, "Package Name\tPR Opened\ncore-pkg\t2026-09-18\nuntested\t2026-10-01\n"
+            )
             output = os.path.join(directory, "combined.tsv")
             argv = [
                 "consolidate", "--input", results, "--blockers", blockers,
-                "--conda", conda, "--output", output,
+                "--conda", conda, "--pr-dates", pr_dates, "--output", output,
             ]
             with patch("sys.argv", argv), contextlib.redirect_stdout(
                 io.StringIO()
@@ -66,35 +76,36 @@ class ConsolidateTests(unittest.TestCase):
             rows = list(csv.reader(io.StringIO(text), delimiter="\t"))
 
         # Formulas are left unquoted so Google Sheets evaluates them when pasted.
-        self.assertIn(f"Core_Pkg\t\t{CORE_LINK}\t", text)
+        self.assertIn(f"Core_Pkg\t2026-09-18\t\t{CORE_LINK}\t", text)
         url = "https://example.org/core.whl"
         self.assertEqual(
             rows,
             [
                 [
-                    "Package Name", "Potential Blockers", "Available on Conda",
+                    "Package Name", "PR Opened", "Potential Blockers", "Available on Conda",
                     "py3.14_install_status", "py3.14_binary_url",
                     "py3.14_buildtools_install_status", "py3.14_buildtools_binary_url",
                 ],
-                ["Core_Pkg", "", CORE_LINK, "success", url, "", ""],
-                ["", "", "", "", "", "", ""],
-                ["core.pkg", "", CORE_LINK, "success", url, "", ""],
-                ["# Section", "", "", "", "", "", ""],
-                ["client", "Core_Pkg", "No", "", "", "failure", ""],
-                ["untested", "", "No", "", "", "", ""],
+                ["Core_Pkg", "2026-09-18", "", CORE_LINK, "success", url, "", ""],
+                ["", "", "", "", "", "", "", ""],
+                ["core.pkg", "2026-09-18", "", CORE_LINK, "success", url, "", ""],
+                ["# Section", "", "", "", "", "", "", ""],
+                ["client", "", "Core_Pkg", "No", "", "", "failure", ""],
+                ["untested", "2026-10-01", "", "No", "", "", "", ""],
             ],
         )
 
-    def test_no_results_keeps_only_the_blocker_and_conda_columns(self) -> None:
+    def test_no_results_keeps_only_the_leading_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             blockers = os.path.join(directory, "package-blockers.tsv")
             with open(blockers, "w", encoding="utf-8", newline="") as fh:
                 fh.write("Package Name\tPotential Blockers\nCore_Pkg\t\n\t\nclient\tCore_Pkg\n")
             conda = write_conda(directory)
+            pr_dates = write_pr_dates(directory, "Package Name\tPR Opened\nclient\t2026-09-01\n")
             output = os.path.join(directory, "combined.tsv")
             argv = [
                 "consolidate", "--no-results", "--plain-conda", "--blockers", blockers,
-                "--conda", conda, "--output", output,
+                "--conda", conda, "--pr-dates", pr_dates, "--output", output,
             ]
             with patch("sys.argv", argv), contextlib.redirect_stdout(
                 io.StringIO()
@@ -103,9 +114,23 @@ class ConsolidateTests(unittest.TestCase):
             with open(output, newline="", encoding="utf-8") as fh:
                 self.assertEqual(
                     fh.read(),
-                    "Package Name\tPotential Blockers\tAvailable on Conda\n"
-                    "Core_Pkg\t\tYes\n\t\t\nclient\tCore_Pkg\tNo\n",
+                    "Package Name\tPR Opened\tPotential Blockers\tAvailable on Conda\n"
+                    "Core_Pkg\t\t\tYes\n\t\t\t\nclient\t2026-09-01\tCore_Pkg\tNo\n",
                 )
+
+    def test_missing_pr_dates_are_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blockers = os.path.join(directory, "package-blockers.tsv")
+            with open(blockers, "w", encoding="utf-8", newline="") as fh:
+                fh.write("Package Name\tPotential Blockers\npkg\t\n")
+            argv = [
+                "consolidate", "--no-results", "--blockers", blockers,
+                "--conda", write_conda(directory),
+                "--pr-dates", os.path.join(directory, "missing.tsv"),
+            ]
+            with patch("sys.argv", argv), self.assertRaises(SystemExit) as raised:
+                consolidate_results.main()
+        self.assertIn("run fetch_package_status.py first", str(raised.exception.code))
 
     def test_blocker_columns_must_come_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
