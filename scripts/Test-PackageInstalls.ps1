@@ -45,7 +45,9 @@ param(
     [string]$LogPath
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
 if (-not $OutputPath) { $OutputPath = "results-$ColumnPrefix.csv" }
 if (-not $LogPath) { $LogPath = "results-$ColumnPrefix.md" }
 if (-not $CacheDir) { $CacheDir = Join-Path ([IO.Path]::GetTempPath()) "pip-cache-$ColumnPrefix" }

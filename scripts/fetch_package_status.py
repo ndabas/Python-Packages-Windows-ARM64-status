@@ -7,8 +7,10 @@ GitHub pull requests and writes a markdown report of the rows that need updating
 (the sheet itself is never modified). It then writes the two package lists
 consumed by the test/build matrices from each package's updated status (the
 proposed status where the report has one, otherwise the sheet's):
-test-win_arm64.txt holds the packages whose status is "Builds Available", and
-test-win_arm64-buildtools.txt those with no status or "Needs PR". The GitHub CLI
+test-win_arm64.txt holds the packages whose status is "Builds Available" or that
+have win_arm64 wheels, and test-win_arm64-buildtools.txt those with no status or
+"Needs PR". An open linked PR proposes "PR Under Review" even when wheels are
+already available (e.g. a follow-up PR adding CUDA support). The GitHub CLI
 (`gh`) is required for the pull request lookups.
 """
 
@@ -75,13 +77,14 @@ def evaluate(
     cols: dict[str, str],
 ) -> dict:
     """Work out the status the sheet should show for one package."""
-    # Rows with wheels on PyPI are settled, so their PRs are never looked up.
     prs = [cache[url] for url, *_ in pr_refs(sheet_row.get(cols["pr"], "")) if url in cache]
 
-    if has_target_wheel:
-        proposed = STATUS_BUILDS_AVAILABLE
-    elif any(pr["state"] == "open" for pr in prs):
+    # An open PR takes precedence over existing wheels, e.g. follow-up work such as
+    # adding CUDA support to a package that already publishes win_arm64 wheels.
+    if any(pr["state"] == "open" for pr in prs):
         proposed = STATUS_PR_UNDER_REVIEW
+    elif has_target_wheel:
+        proposed = STATUS_BUILDS_AVAILABLE
     elif any(pr["merged"] for pr in prs):
         proposed = STATUS_PR_MERGED
     else:
@@ -158,14 +161,19 @@ def updated_status(result: dict) -> str:
 def write_package_lists(
     output_dir: str, statuses: list[PackageStatus], results: list[dict]
 ) -> None:
-    """Write the test lists from each package's updated sheet status."""
+    """Write the test lists from each package's updated sheet status.
+
+    Packages with a target wheel are always tested, even when an open PR keeps
+    their status at "PR Under Review".
+    """
     sheet_status = {
         r["package"].lower(): updated_status(r).strip().lower() for r in results
     }
     testable = [
         s.package
         for s in statuses
-        if sheet_status.get(s.package.lower()) == STATUS_BUILDS_AVAILABLE.lower()
+        if s.has_target_wheel
+        or sheet_status.get(s.package.lower()) == STATUS_BUILDS_AVAILABLE.lower()
     ]
     buildable = [
         s.package
@@ -231,12 +239,8 @@ def main() -> None:
     def has_target_wheel(row: dict[str, str]) -> bool:
         return row[cols["package"]].lower() in with_wheels
 
-    unresolved = [row for row in sheet_rows if not has_target_wheel(row)]
-    print(
-        f"Checking pull requests for {len(unresolved)} of {len(sheet_rows)} packages "
-        f"({len(sheet_rows) - len(unresolved)} already have {TARGET_PLATFORM} wheels)"
-    )
-    cache = check_pull_requests(unresolved, cols["pr"])
+    print(f"Checking pull requests for {len(sheet_rows)} packages")
+    cache = check_pull_requests(sheet_rows, cols["pr"])
     results = [
         evaluate(row, has_target_wheel(row), cache, cols) for row in sheet_rows
     ]

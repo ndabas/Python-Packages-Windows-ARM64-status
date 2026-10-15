@@ -230,6 +230,43 @@ class SharedClassificationTests(unittest.TestCase):
             with open(path, encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "todo\nblank\n")
 
+    def test_status_script_open_pr_overrides_available_wheels(self) -> None:
+        cols = {"package": "Package", "status": "Status", "pr": "PR"}
+        url = "https://github.com/o/r/pull/1"
+        row = {"Package": "xgboost", "Status": "Builds Available", "PR": url}
+
+        def evaluate(state: str, merged: bool, has_wheel: bool) -> str:
+            cache = {url: {"url": url, "state": state, "merged": merged, "author": ""}}
+            return fetch_package_status.evaluate(row, has_wheel, cache, cols)[
+                "proposed_status"
+            ]
+
+        self.assertEqual(evaluate("open", False, True), "PR Under Review")
+        self.assertEqual(evaluate("closed", True, True), "Builds Available")
+        self.assertEqual(evaluate("closed", False, True), "Builds Available")
+        self.assertEqual(evaluate("closed", True, False), "PR Merged")
+        self.assertEqual(evaluate("open", False, False), "PR Under Review")
+
+    def test_status_script_tests_packages_with_wheels_under_review(self) -> None:
+        wheels = pypi.wheel_status(metadata([], ("pkg-1-py3-none-win_arm64.whl",)))
+        statuses = [fetch_package_status.PackageStatus("xgboost", wheels)]
+        results = [
+            {
+                "package": "xgboost",
+                "current_status": "Builds Available",
+                "proposed_status": "PR Under Review",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(
+            io.StringIO()
+        ):
+            fetch_package_status.write_package_lists(directory, statuses, results)
+            with open(os.path.join(directory, "test-win_arm64.txt"), encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "xgboost\n")
+            path = os.path.join(directory, "test-win_arm64-buildtools.txt")
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "")
+
     def test_read_sheet_filters_unless_keep_all(self) -> None:
         text = "Name,Other\nA,1\n,2\n# note,3\na,4\nB,5\n".encode()
         with patch.object(sheet, "fetch", return_value=text), patch.object(
