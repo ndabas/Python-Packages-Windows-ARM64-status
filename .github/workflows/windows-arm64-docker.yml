@@ -154,7 +154,10 @@ jobs:
           path: data
 
       - name: Combine install results with the blocker TSV
-        run: python scripts/consolidate_results.py ${{ needs.test-package-installs.result == 'skipped' && '--no-results' || '--input results' }}
+        env:
+          PYTHONUNBUFFERED: '1'
+        # Merge stderr into stdout, as the runner reads them separately and can interleave their lines.
+        run: python scripts/consolidate_results.py ${{ needs.test-package-installs.result == 'skipped' && '--no-results' || '--input results' }} 2>&1
 
       - name: Upload combined TSV
         uses: actions/upload-artifact@v7

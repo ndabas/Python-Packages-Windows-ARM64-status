@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -9,6 +10,22 @@ import unittest
 from unittest.mock import patch
 
 import get_consolidated_results as gcr
+
+LOG = (
+    "\ufeff2026-10-16T07:35:11.0901802Z ##[group]Run actions/download-artifact@v8\n"
+    "2026-10-16T07:35:11.0913488Z ##[endgroup]\n"
+    "2026-10-16T07:35:11.5920892Z ##[group]Run python scripts/consolidate_results.py --input results\n"
+    "2026-10-16T07:35:11.5923386Z \x1b[36;1mpython scripts/consolidate_results.py --input results\x1b[0m\n"
+    "2026-10-16T07:35:11.5923400Z shell: /usr/bin/bash -e {0}\n"
+    "2026-10-16T07:35:11.6206441Z ##[endgroup]\n"
+    "2026-10-16T07:35:12.0250425Z Warning: 1 packages are not on conda under their own name:\n"
+    "2026-10-16T07:35:12.0250500Z   foo: foo-bar\n"
+    "2026-10-16T07:35:12.0250600Z\n"
+    "2026-10-16T07:35:12.0261177Z Wrote data/win_arm64-status-20261014.tsv\n"
+    "2026-10-16T07:35:12.0538855Z ##[group]Run actions/upload-artifact@v7\n"
+    "2026-10-16T07:35:12.0541225Z   name: consolidated-results\n"
+    "2026-10-16T07:35:12.0549684Z ##[endgroup]\n"
+)
 
 
 def artifact(name: str, run_id: int, created: str, branch: str = "master", expired: bool = False) -> dict:
@@ -94,6 +111,36 @@ class ReorderTests(unittest.TestCase):
         self.assertIn("does not start with", str(raised.exception.code))
 
 
+class StepOutputTests(unittest.TestCase):
+    def test_only_the_step_output_is_kept(self) -> None:
+        self.assertEqual(
+            gcr.step_output(LOG),
+            [
+                "Warning: 1 packages are not on conda under their own name:",
+                "  foo: foo-bar",
+                "",
+                "Wrote data/win_arm64-status-20261014.tsv",
+            ],
+        )
+
+    def test_failed_step_stops_at_cleanup(self) -> None:
+        log = (
+            "2026-10-16T07:35:11.5Z ##[group]Run python scripts/consolidate_results.py --no-results\n"
+            "2026-10-16T07:35:11.6Z ##[endgroup]\n"
+            "2026-10-16T07:35:12.0Z SystemExit: missing\n"
+            "2026-10-16T07:35:12.1Z ##[error]Process completed with exit code 1.\n"
+            "2026-10-16T07:35:12.2Z Post job cleanup.\n"
+            "2026-10-16T07:35:12.3Z ##[group]Run something\n"
+        )
+        self.assertEqual(
+            gcr.step_output(log),
+            ["SystemExit: missing", "Error: Process completed with exit code 1."],
+        )
+
+    def test_missing_step_is_none(self) -> None:
+        self.assertIsNone(gcr.step_output(LOG.split("2026-10-16T07:35:11.5920892Z")[0]))
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, directory: str, *args: str) -> str:
         artifacts = {
@@ -104,6 +151,12 @@ class MainTests(unittest.TestCase):
         }
 
         def fake_run(command: list[str], check: bool = True):
+            if command[:2] == ["gh", "api"]:
+                if command[-1].endswith("jobs?per_page=100"):
+                    jobs = {"jobs": [{"name": "fetch-package-lists", "id": 1}, {"name": "consolidate-results", "id": 2}]}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(jobs), "")
+                self.assertTrue(command[-1].endswith("jobs/2/logs"))
+                return subprocess.CompletedProcess(command, 0, LOG, "")
             target = command[command.index("--dir") + 1]
             with open(os.path.join(target, "win_arm64-status-20261014.tsv"), "w", encoding="utf-8") as fh:
                 fh.write("Package Name\tPotential Blockers\na\t\nb\ta\n")
@@ -128,6 +181,8 @@ class MainTests(unittest.TestCase):
                     fh.write("old")
             out = self.run_main(directory, "--remove-older")
             self.assertIn("run 7", out)
+            self.assertIn("Output of consolidate_results.py in run 7:\n  Warning: 1 packages", out)
+            self.assertIn("  Wrote data/win_arm64-status-20261014.tsv\n", out)
             self.assertEqual(
                 sorted(os.listdir(directory)),
                 ["other.tsv", "win_arm64-status-20261014.tsv", "win_arm64-status-20261231.tsv"],

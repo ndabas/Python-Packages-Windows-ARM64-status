@@ -139,7 +139,9 @@ It requires `gh` and writes to `data`, overwriting an existing copy. Before
 writing, it reorders the TSV's rows, matched on package name, to follow the
 current sheet, so it can still be pasted after the sheet has been re-sorted.
 Sheet packages missing from the TSV are left blank and TSV packages no longer in
-the sheet are dropped, with a warning for each. Options:
+the sheet are dropped, with a warning for each. It also prints the output of the
+run's `consolidate_results.py` step, such as its warnings, from the job log.
+Options:
 
 - `--remove-older`: delete `win_arm64-status-<date>.tsv` files with an earlier
   date.

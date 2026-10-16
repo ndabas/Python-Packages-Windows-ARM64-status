@@ -6,10 +6,13 @@ artifact. Before writing, the TSV's rows are reordered, matched on package name,
 to follow the current Google Sheet, so it can be pasted alongside the sheet even
 after the sheet has been re-sorted. Sheet packages missing from the TSV are left
 blank and TSV packages no longer in the sheet are dropped, with a warning for each.
+The output of the run's consolidate step, including its warnings, is printed too.
 """
 
 import argparse
 import csv
+import io
+import json
 import os
 import re
 import shutil
@@ -23,6 +26,13 @@ from sheet import is_package_row, load_sheet
 ARTIFACT = "consolidated-results"
 PACKAGE_COLUMN = "Package Name"
 TSV_RE = re.compile(r"^win_arm64-status-(\d{8})\.tsv$")
+JOB = "consolidate-results"
+STEP_START = "##[group]Run python scripts/consolidate_results.py"
+# Lines that start the step after it in a job log.
+STEP_ENDS = ("##[group]Run ", "Post job cleanup.", "Cleaning up orphan processes")
+TIMESTAMP_RE = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ?")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+COMMAND_RE = re.compile(r"^##\[(\w+)\]")
 
 
 def latest_full_run(artifacts: list[dict], branch: str | None = None) -> int | None:
@@ -120,6 +130,63 @@ def reorder_file(path: str, sheet_names: list[str]) -> None:
     write_tsv(path, output)
 
 
+def step_output(log: str) -> list[str] | None:
+    """Lines printed by the consolidate step in a job log, or None if it isn't there.
+
+    Timestamps and colours are removed, and workflow commands such as ##[error]
+    are shown as "Error: ".
+    """
+    lines = [ANSI_RE.sub("", TIMESTAMP_RE.sub("", line)) for line in log.splitlines()]
+    start = next((i for i, line in enumerate(lines) if line.startswith(STEP_START)), None)
+    if start is None:
+        return None
+    # The step starts with a group echoing its script and environment.
+    end_header = next(
+        (i for i in range(start, len(lines)) if lines[i].startswith("##[endgroup]")), start
+    )
+    output: list[str] = []
+    for line in lines[end_header + 1:]:
+        if line.startswith(STEP_ENDS):
+            break
+        output.append(COMMAND_RE.sub(lambda m: f"{m.group(1).capitalize()}: ", line))
+    return output
+
+
+def fetch_step_output(run_id: int) -> list[str]:
+    """Fetch the consolidate step's output from a run; raise RuntimeError if unavailable."""
+    jobs_path = f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?per_page=100"
+    result = run(["gh", "api", jobs_path], check=False)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr.strip().splitlines() or ["gh failed"])[-1])
+    job = next((job for job in json.loads(result.stdout)["jobs"] if job["name"] == JOB), None)
+    if job is None:
+        raise RuntimeError(f"run {run_id} has no {JOB} job")
+
+    path = f"repos/{{owner}}/{{repo}}/actions/jobs/{job['id']}/logs"
+    # Logs contain colour codes, which newer versions of gh refuse to print by default.
+    result = run(["gh", "api", "--allow-escape-sequences", path], check=False)
+    if result.returncode != 0 and "unknown flag" in result.stderr:
+        result = run(["gh", "api", path], check=False)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr.strip().splitlines() or ["gh failed"])[-1])
+    output = step_output(result.stdout)
+    if output is None:
+        raise RuntimeError(f"the {JOB} job log has no consolidate_results.py step")
+    return output
+
+
+def print_step_output(run_id: int) -> None:
+    """Print the consolidate step's output from a run, or warn if it can't be fetched."""
+    try:
+        output = fetch_step_output(run_id)
+    except RuntimeError as error:
+        print(f"Warning: could not fetch the consolidate step's output: {error}", file=sys.stderr)
+        return
+    print(f"Output of consolidate_results.py in run {run_id}:")
+    for line in output:
+        print(f"  {line}" if line else "")
+
+
 def download(run_id: int, directory: str) -> list[str]:
     """Download the consolidated artifact of a run and return its file names."""
     result = run(
@@ -168,6 +235,7 @@ def main() -> None:
     run_id = latest_full_run(artifacts["artifacts"], args.branch)
     if run_id is None:
         raise SystemExit(f"No full workflow run with a {ARTIFACT} artifact was found")
+    print_step_output(run_id)
     print(f"Downloading {ARTIFACT} from run {run_id}")
 
     # gh run download refuses to overwrite existing files, so stage in a temp directory.
@@ -201,4 +269,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Keep printed lines in order with the warnings on stderr when stdout is not a console.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
     main()
