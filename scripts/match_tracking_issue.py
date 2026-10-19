@@ -1,10 +1,12 @@
-"""Match the sheet's pull requests under review against a GitHub tracking issue.
+"""Match the sheet's rows that link your pull requests against a GitHub tracking issue
+and the top PyPI packages.
 
-Reads the same Google Sheet settings as fetch_package_status.py, keeps the rows whose
-status is "PR Under Review" and that link a pull request opened by the author (the
-authenticated GitHub CLI user unless --author is given), and writes a markdown report
-of those packages that are also listed in the tracking issue's tables. The GitHub CLI
-(`gh`) is required to read the issue and the pull requests.
+Reads the same Google Sheet settings as fetch_package_status.py and keeps the rows,
+whatever their status, that link a pull request opened by the author (the
+authenticated GitHub CLI user unless --author is given). Writes a markdown report of
+those packages that are also listed in the tracking issue's tables, and of those
+that are among the top PyPI packages by downloads. The GitHub CLI (`gh`) is required
+to read the issue and the pull requests.
 """
 
 import argparse
@@ -13,7 +15,8 @@ import re
 
 from common import DATA_DIR, ROOT, normalize_name, write_text
 from github_cli import gh, pr_refs, require_gh, search_issues
-from sheet import STATUS_PR_UNDER_REVIEW, load_sheet
+from pypi import TOP_PYPI_URL, TopPackage, fetch_top_packages
+from sheet import load_sheet
 
 DEFAULT_REPO = "khmyznikov/PyEnv-WoA-State"
 DEFAULT_ISSUE = "1"
@@ -67,35 +70,106 @@ def issue_packages(body: str) -> dict[str, dict]:
     return packages
 
 
+def authored_rows(
+    sheet_rows: list[dict[str, str]], cols: dict[str, str], authored: set[str]
+) -> list[dict]:
+    """Sheet rows, of any status, that link at least one pull request in authored."""
+    rows = []
+    for row in sheet_rows:
+        prs = [
+            url for url, *_ in pr_refs(row.get(cols["pr"], "")) if url.lower() in authored
+        ]
+        if prs:
+            rows.append(
+                {
+                    "package": row[cols["package"]],
+                    "status": row.get(cols["status"], ""),
+                    "prs": prs,
+                }
+            )
+    return rows
+
+
+def match_issue(rows: list[dict], issue: dict[str, dict]) -> list[dict]:
+    matches = [
+        {**row, "issue": issue[normalize_name(row["package"])]}
+        for row in rows
+        if normalize_name(row["package"]) in issue
+    ]
+    return sorted(matches, key=lambda match: match["package"].lower())
+
+
+def match_top(rows: list[dict], top: dict[str, TopPackage]) -> list[dict]:
+    matches = [
+        {**row, "top": top[normalize_name(row["package"])]}
+        for row in rows
+        if normalize_name(row["package"]) in top
+    ]
+    return sorted(matches, key=lambda match: match["top"].rank)
+
+
+def format_prs(urls: list[str]) -> str:
+    return "<br>".join(
+        f"[{url.split('/')[3]}/{url.split('/')[4]}#{url.rsplit('/', 1)[1]}]({url})"
+        for url in urls
+    ) or "—"
+
+
 def render_report(
-    matches: list[dict], repo: str, number: str, total: int, author: str
+    issue_matches: list[dict],
+    top_matches: list[dict],
+    repo: str,
+    number: str,
+    total: int,
+    author: str,
+    top_url: str,
+    top_count: int,
 ) -> str:
     issue_url = f"https://github.com/{repo}/issues/{number}"
     lines = [
-        "# Pull requests under review listed in the tracking issue",
+        f"# Pull requests by @{author}",
         "",
-        f"{len(matches)} of {total} sheet rows with status {STATUS_PR_UNDER_REVIEW!r} "
-        f"and a pull request by @{author} are listed in [{repo}#{number}]({issue_url}).",
+        f"{total} sheet rows link a pull request by @{author}.",
+        "",
+        "## Listed in the tracking issue",
+        "",
+        f"{len(issue_matches)} of {total} are listed in [{repo}#{number}]({issue_url}).",
         "",
     ]
-    if not matches:
-        return "\n".join(lines)
+    if issue_matches:
+        lines += [
+            "| Package | Sheet status | Pull requests | PR linked in issue | Issue status "
+            "| Issue section |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for match in issue_matches:
+            linked = "yes" if set(match["prs"]) & match["issue"]["prs"] else "no"
+            lines.append(
+                f"| {match['package']} | {match['status'] or '—'} | "
+                f"{format_prs(match['prs'])} | {linked} | "
+                f"{match['issue']['done'] or '—'} | {match['issue']['section'] or '—'} |"
+            )
+        lines.append("")
 
     lines += [
-        "| Package | Pull requests | PR linked in issue | Issue status | Issue section |",
-        "| --- | --- | --- | --- | --- |",
+        "## Top PyPI packages",
+        "",
+        f"{len(top_matches)} of {total} are among the [top {top_count:,} PyPI "
+        f"packages]({top_url}) by downloads last month.",
+        "",
     ]
-    for match in matches:
-        prs = "<br>".join(
-            f"[{url.split('/')[3]}/{url.split('/')[4]}#{url.rsplit('/', 1)[1]}]({url})"
-            for url in match["prs"]
-        )
-        linked = "yes" if set(match["prs"]) & match["issue"]["prs"] else "no"
-        lines.append(
-            f"| {match['package']} | {prs or '—'} | {linked} | "
-            f"{match['issue']['done'] or '—'} | {match['issue']['section'] or '—'} |"
-        )
-    lines.append("")
+    if top_matches:
+        lines += [
+            "| Rank | Package | Downloads | Sheet status | Pull requests |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for match in top_matches:
+            top = match["top"]
+            lines.append(
+                f"| {top.rank:,} | {match['package']} | {top.downloads:,} | "
+                f"{match['status'] or '—'} | {format_prs(match['prs'])} |"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -108,6 +182,9 @@ def main() -> None:
         "--author", help="Pull request author (default: the authenticated gh user)"
     )
     parser.add_argument(
+        "--top-pypi", default=TOP_PYPI_URL, help="Top PyPI packages CSV URL"
+    )
+    parser.add_argument(
         "--output", default=os.path.join(DATA_DIR, "tracking-issue-report.md")
     )
     args = parser.parse_args()
@@ -117,34 +194,31 @@ def main() -> None:
     sheet_rows, cols = load_sheet(args.env)
     authored = authored_pr_urls(author)
     print(f"Found {len(authored)} pull requests by @{author}")
-    under_review = []
-    for row in sheet_rows:
-        if row.get(cols["status"], "").lower() != STATUS_PR_UNDER_REVIEW.lower():
-            continue
-        prs = [
-            url for url, *_ in pr_refs(row.get(cols["pr"], "")) if url.lower() in authored
-        ]
-        if prs:
-            under_review.append((row, prs))
-    print(f"{len(under_review)} rows have pull requests under review by @{author}")
+    rows = authored_rows(sheet_rows, cols, authored)
+    print(f"{len(rows)} rows link pull requests by @{author}")
 
     issue = issue_packages(fetch_issue_body(args.repo, args.issue))
     print(f"Read {len(issue)} packages from {args.repo}#{args.issue}")
+    top = fetch_top_packages(args.top_pypi)
+    print(f"Read {len(top)} packages from {args.top_pypi}")
 
-    matches = [
-        {
-            "package": row[cols["package"]],
-            "prs": prs,
-            "issue": issue[normalize_name(row[cols["package"]])],
-        }
-        for row, prs in under_review
-        if normalize_name(row[cols["package"]]) in issue
-    ]
-    matches.sort(key=lambda match: match["package"].lower())
-
-    report = render_report(matches, args.repo, args.issue, len(under_review), author)
+    issue_matches = match_issue(rows, issue)
+    top_matches = match_top(rows, top)
+    report = render_report(
+        issue_matches,
+        top_matches,
+        args.repo,
+        args.issue,
+        len(rows),
+        author,
+        args.top_pypi,
+        len(top),
+    )
     write_text(args.output, report)
-    print(f"Wrote {args.output} ({len(matches)} packages in both lists)")
+    print(
+        f"Wrote {args.output} ({len(issue_matches)} in the tracking issue, "
+        f"{len(top_matches)} in the top PyPI packages)"
+    )
 
 
 if __name__ == "__main__":

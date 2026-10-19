@@ -1,14 +1,50 @@
 """PyPI JSON API lookups and win_arm64 wheel classification."""
 
+import csv
 import json
 import urllib.error
 import urllib.parse
 from dataclasses import dataclass
 
-from common import fetch
+from common import fetch, normalize_name
 
 PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 TARGET_PLATFORM = "win_arm64"
+# hugovk's monthly list of the 15,000 most-downloaded PyPI projects of the last month.
+TOP_PYPI_URL = "https://hugovk.dev/top-pypi-packages/top-pypi-packages.csv"
+
+
+@dataclass(frozen=True)
+class TopPackage:
+    """A project in the top PyPI packages list."""
+
+    name: str
+    rank: int
+    downloads: int
+
+
+def parse_top_packages(text: str) -> dict[str, TopPackage]:
+    """Parse the download_count,project CSV, keyed by normalized name and ranked
+    from 1 by download count."""
+    rows = []
+    for row in csv.DictReader(text.splitlines()):
+        name = (row.get("project") or "").strip()
+        if name:
+            rows.append((name, int(row.get("download_count") or 0)))
+    rows.sort(key=lambda row: -row[1])
+    packages: dict[str, TopPackage] = {}
+    for name, downloads in rows:
+        packages.setdefault(
+            normalize_name(name), TopPackage(name, len(packages) + 1, downloads)
+        )
+    return packages
+
+
+def fetch_top_packages(url: str = TOP_PYPI_URL) -> dict[str, TopPackage]:
+    packages = parse_top_packages(fetch(url).decode("utf-8-sig"))
+    if not packages:
+        raise SystemExit(f"No packages read from {url}")
+    return packages
 
 
 @dataclass(frozen=True)

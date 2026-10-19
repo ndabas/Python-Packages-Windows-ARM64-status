@@ -14,7 +14,7 @@ to `data` by default.
 | `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` and `conda-packages.txt` into `win_arm64-status-<date>.tsv`. |
 | `get_consolidated_results.py` | Downloads `win_arm64-status-<date>.tsv` from the latest full workflow run, reordered to match the sheet, and writes `consolidated-results.md` with the rows that differ from the sheet and the conda name warnings. Requires `gh`. |
 | `my_contribs.py` | Writes `my-contribs.md`, a weekly summary of your Windows ARM64 PRs, with open PRs that conflict. Merged PRs that others have commented on after merging (your own comments are ignored) are listed there, with the comments written to `my-contribs-post-merge-comments.md` (`--comments-output`), PRs with the most recent comment first; that file is removed when there are none. Requires `gh`. |
-| `match_tracking_issue.py` | Writes `tracking-issue-report.md`, matching sheet rows under review that link your PRs (the authenticated `gh` user, or `--author`) against a tracking issue. Requires `gh`. |
+| `match_tracking_issue.py` | Writes `tracking-issue-report.md` from the sheet rows, of any status, that link your PRs (the authenticated `gh` user, or `--author`), with each package's sheet status: those listed in a tracking issue (`--repo`, `--issue`), and those among the [top 15,000 PyPI packages](https://hugovk.dev/top-pypi-packages/) by last month's downloads (`--top-pypi` overrides the CSV URL), most downloaded first. Requires `gh`. |
 
 Shared helpers live in `common.py` (paths, HTTP, output), `sheet.py` (Google
 Sheet access), `pypi.py` (PyPI lookups and wheel classification),
