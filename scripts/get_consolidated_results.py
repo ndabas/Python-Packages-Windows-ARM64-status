@@ -7,6 +7,11 @@ to follow the current Google Sheet, so it can be pasted alongside the sheet even
 after the sheet has been re-sorted. Sheet packages missing from the TSV are left
 blank and TSV packages no longer in the sheet are dropped, with a warning for each.
 The output of the run's consolidate step, including its warnings, is printed too.
+
+consolidated-results.md is written alongside the TSV, with the reordered rows
+that differ from the sheet's columns of the same name, and the consolidate
+step's warning about packages with similarly named conda packages, which is
+left out of the printed output.
 """
 
 import argparse
@@ -18,14 +23,22 @@ import re
 import shutil
 import sys
 import tempfile
+from datetime import datetime, timezone
+from typing import NamedTuple
 
-from common import DATA_DIR, ROOT, normalize_name, write_tsv
+from common import DATA_DIR, ROOT, normalize_name, write_text, write_tsv
+from conda_repo import package_url
 from github_cli import gh, require_gh, run
 from sheet import is_package_row, load_sheet
 
 ARTIFACT = "consolidated-results"
+REPORT = "consolidated-results.md"
 PACKAGE_COLUMN = "Package Name"
 TSV_RE = re.compile(r"^win_arm64-status-(\d{8})\.tsv$")
+HYPERLINK_RE = re.compile(r'^=HYPERLINK\("((?:[^"]|"")*)"\s*[,;]\s*"((?:[^"]|"")*)"\)$', re.I)
+# The sheet shows dates as M/D/YYYY, while the TSV has YYYY-MM-DD.
+DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y")
+CONDA_WARNING_RE = re.compile(r"^Warning: .*not on conda under their own name")
 JOB = "consolidate-results"
 STEP_START = "##[group]Run python scripts/consolidate_results.py"
 # Lines that start the step after it in a job log.
@@ -100,8 +113,11 @@ def name_list(names: list[str], shown: int = 20) -> str:
     return text + (f", ... and {len(names) - shown} more" if len(names) > shown else "")
 
 
-def reorder_file(path: str, sheet_names: list[str]) -> None:
-    """Rewrite a consolidated TSV in place to follow the sheet's package order."""
+def reorder_file(path: str, sheet_names: list[str]) -> list[list[str]]:
+    """Rewrite a consolidated TSV in place to follow the sheet's package order.
+
+    Returns the rewritten rows, header first.
+    """
     with open(path, newline="", encoding="utf-8") as fh:
         rows = list(csv.reader(fh, delimiter="\t"))
     if rows and rows[0][:1] == ["Package"]:
@@ -128,7 +144,174 @@ def reorder_file(path: str, sheet_names: list[str]) -> None:
         print(f"Warning: dropped, no longer in the sheet: {name_list(dropped)}", file=sys.stderr)
 
     write_tsv(path, output)
+    return output
 
+
+def comparable(value: str) -> str:
+    """A cell value as the sheet shows it: HYPERLINK formulas as their label, dates as ISO."""
+    value = value.strip()
+    match = HYPERLINK_RE.match(value)
+    if match:
+        return match.group(2).replace('""', '"')
+    for date_format in DATE_FORMATS:
+        try:
+            return datetime.strptime(value, date_format).date().isoformat()
+        except ValueError:
+            pass
+    return value
+
+
+def diff_rows(
+    rows: list[list[str]], sheet_rows: list[dict[str, str]]
+) -> list[tuple[int, list[str], set[int]]]:
+    """Reordered TSV rows (header first) that differ from the sheet's columns of the same name.
+
+    Returns each differing row's sheet row number, its values, and the indexes of
+    its differing cells. Columns missing from the sheet are compared as blank.
+    """
+    header, *body = rows
+    changed: list[tuple[int, list[str], set[int]]] = []
+    for number, (row, sheet_row) in enumerate(zip(body, sheet_rows), start=2):
+        cells = {
+            i for i, column in enumerate(header)
+            if comparable(row[i] if i < len(row) else "") != comparable(sheet_row.get(column, ""))
+        }
+        if cells:
+            changed.append((number, row, cells))
+    return changed
+
+
+def markdown_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
+        "|", "&#124;"
+    ).replace("*", "\\*").replace("_", "\\_").replace("\r", " ").replace("\n", " ")
+
+
+def markdown_value(value: str) -> str:
+    """A TSV cell for a Markdown table, with HYPERLINK formulas and URLs as links."""
+    match = HYPERLINK_RE.match(value.strip())
+    if match:
+        url, label = (group.replace('""', '"') for group in match.groups())
+        return f"[{markdown_text(label)}](<{url}>)"
+    if re.match(r"^https?://\S+$", value):
+        label = value.rstrip("/").rsplit("/", 1)[-1] or value
+        return f"[{markdown_text(label)}](<{value}>)"
+    return markdown_text(value)
+
+
+def diff_table(header: list[str], changed: list[tuple[int, list[str], set[int]]]) -> list[str]:
+    """Markdown table of the differing rows, with the package and every column that differs."""
+    differing = set().union(*(cells for _, _, cells in changed))
+    columns = [i for i in range(len(header)) if i == 0 or i in differing]
+    lines = [
+        "| Row | " + " | ".join(markdown_text(header[i]) for i in columns) + " |",
+        "| ---: |" + " --- |" * len(columns),
+    ]
+    for number, row, cells in changed:
+        values = []
+        for i in columns:
+            text = markdown_value(row[i] if i < len(row) else "")
+            values.append(f"**{text or '(blank)'}**" if i in cells else text)
+        lines.append(f"| {number} | " + " | ".join(values) + " |")
+    return lines
+
+
+def split_conda_warning(output: list[str]) -> tuple[list[str], list[str]]:
+    """Split the warning about similarly named conda packages, with its indented
+    entries, from the rest of the consolidate step's output."""
+    warning: list[str] = []
+    rest: list[str] = []
+    in_warning = False
+    for line in output:
+        if CONDA_WARNING_RE.match(line):
+            in_warning = True
+            warning.append(line)
+        elif in_warning and line.startswith("  "):
+            warning.append(line)
+        else:
+            in_warning = False
+            rest.append(line)
+    return warning, rest
+
+
+def conda_section(warning: list[str] | None, error: str = "") -> list[str]:
+    lines = ["## Similarly named conda packages", ""]
+    if warning is None:
+        return lines + [f"The consolidate step's output could not be fetched: {error}", ""]
+    if not warning:
+        return lines + ["The consolidate step reported none.", ""]
+    intro, *entries = warning
+    lines += [markdown_text(intro.removeprefix("Warning: ")), ""]
+    for entry in entries:
+        name, _, names = entry.strip().partition(":")
+        links = [
+            f"[{markdown_text(found)}](<{package_url(found)}>)"
+            for found in (n.strip() for n in names.split(","))
+            if found
+        ]
+        lines.append(f"- {markdown_text(name)}: {', '.join(links)}")
+    return lines + [""]
+
+
+class TsvDiff(NamedTuple):
+    name: str
+    header: list[str]
+    count: int
+    changed: list[tuple[int, list[str], set[int]]]
+    missing_columns: list[str]
+
+
+def compare_with_sheet(
+    name: str, rows: list[list[str]], sheet_rows: list[dict[str, str]]
+) -> TsvDiff:
+    columns = set().union(*(row.keys() for row in sheet_rows)) if sheet_rows else set()
+    return TsvDiff(
+        name,
+        rows[0],
+        len(rows) - 1,
+        diff_rows(rows, sheet_rows),
+        [column for column in rows[0] if column not in columns],
+    )
+
+
+def render_report(
+    run_id: int,
+    diffs: list[TsvDiff] | None,
+    conda_warning: list[str] | None,
+    conda_error: str = "",
+    generated_at: str = "",
+) -> str:
+    """Markdown report; diffs is None when the sheet was not read."""
+    generated_at = generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    lines = [
+        "# Consolidated results",
+        "",
+        f"Generated: {generated_at} from workflow run {run_id}",
+        "",
+        "## Rows that differ from the sheet",
+        "",
+    ]
+    if diffs is None:
+        lines += ["Not compared: the sheet was not read because of --skip-reorder.", ""]
+    for diff in diffs or []:
+        if len(diffs or []) > 1:
+            lines += [f"### {markdown_text(diff.name)}", ""]
+        lines += [
+            f"{len(diff.changed)} of {diff.count} rows in `{diff.name}` differ from the "
+            "sheet's columns of the same name; differing cells are in bold. Dates are "
+            "compared by value and HYPERLINK formulas by their label.",
+            "",
+        ]
+        if diff.missing_columns:
+            lines += [
+                "Columns not in the sheet, compared as blank: "
+                + ", ".join(markdown_text(c) for c in diff.missing_columns),
+                "",
+            ]
+        if diff.changed:
+            lines += diff_table(diff.header, diff.changed) + [""]
+    lines += conda_section(conda_warning, conda_error)
+    return "\n".join(lines)
 
 def step_output(log: str) -> list[str] | None:
     """Lines printed by the consolidate step in a job log, or None if it isn't there.
@@ -175,13 +358,7 @@ def fetch_step_output(run_id: int) -> list[str]:
     return output
 
 
-def print_step_output(run_id: int) -> None:
-    """Print the consolidate step's output from a run, or warn if it can't be fetched."""
-    try:
-        output = fetch_step_output(run_id)
-    except RuntimeError as error:
-        print(f"Warning: could not fetch the consolidate step's output: {error}", file=sys.stderr)
-        return
+def print_step_output(run_id: int, output: list[str]) -> None:
     print(f"Output of consolidate_results.py in run {run_id}:")
     for line in output:
         print(f"  {line}" if line else "")
@@ -224,6 +401,7 @@ def main() -> None:
     args = parser.parse_args()
 
     require_gh()
+    sheet_rows = None
     sheet_names = None
     if not args.skip_reorder:
         print("Reading the sheet to reorder the TSV; pass --skip-reorder to skip this")
@@ -235,16 +413,26 @@ def main() -> None:
     run_id = latest_full_run(artifacts["artifacts"], args.branch)
     if run_id is None:
         raise SystemExit(f"No full workflow run with a {ARTIFACT} artifact was found")
-    print_step_output(run_id)
+    conda_warning: list[str] | None = None
+    conda_error = ""
+    try:
+        conda_warning, output = split_conda_warning(fetch_step_output(run_id))
+        print_step_output(run_id, output)
+    except RuntimeError as error:
+        conda_error = str(error)
+        print(f"Warning: could not fetch the consolidate step's output: {error}", file=sys.stderr)
     print(f"Downloading {ARTIFACT} from run {run_id}")
 
+    diffs: list[TsvDiff] | None = None
     # gh run download refuses to overwrite existing files, so stage in a temp directory.
     with tempfile.TemporaryDirectory() as staging:
         files = download(run_id, staging)
-        if sheet_names is not None:
+        if sheet_rows is not None and sheet_names is not None:
+            diffs = []
             for name in files:
                 if TSV_RE.match(name):
-                    reorder_file(os.path.join(staging, name), sheet_names)
+                    rows = reorder_file(os.path.join(staging, name), sheet_names)
+                    diffs.append(compare_with_sheet(name, rows, sheet_rows))
         if not args.dry_run:
             os.makedirs(args.output_dir, exist_ok=True)
         for name in files:
@@ -254,6 +442,21 @@ def main() -> None:
             else:
                 shutil.copyfile(os.path.join(staging, name), target)
                 print(f"Wrote {target}")
+
+    report = os.path.join(args.output_dir, REPORT)
+    changed = (
+        "not compared with the sheet" if diffs is None
+        else f"{sum(len(diff.changed) for diff in diffs)} rows differ from the sheet"
+    )
+    candidates = (
+        "conda warning unavailable" if conda_warning is None
+        else f"{max(len(conda_warning) - 1, 0)} packages with similarly named conda packages"
+    )
+    if args.dry_run:
+        print(f"Would write {report} ({changed}, {candidates})")
+    else:
+        write_text(report, render_report(run_id, diffs, conda_warning, conda_error))
+        print(f"Wrote {report} ({changed}, {candidates})")
 
     dates = [match.group(1) for name in files if (match := TSV_RE.match(name))]
     if args.remove_older and dates and os.path.isdir(args.output_dir):

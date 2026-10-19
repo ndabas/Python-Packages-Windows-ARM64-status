@@ -12,7 +12,7 @@ to `data` by default.
 | `fetch_conda_packages.py` | Writes `conda-packages.txt`, the packages in the Anaconda `pkgs/main` win-arm64 channel (see [Conda availability](#conda-availability)). |
 | `Test-PackageInstalls.ps1` | Installs each package from a list and writes `results-<prefix>.csv` and a Markdown log. |
 | `consolidate_results.py` | Combines `results-*.csv` with `package-blockers.tsv` and `conda-packages.txt` into `win_arm64-status-<date>.tsv`. |
-| `get_consolidated_results.py` | Downloads `win_arm64-status-<date>.tsv` from the latest full workflow run, reordered to match the sheet. Requires `gh`. |
+| `get_consolidated_results.py` | Downloads `win_arm64-status-<date>.tsv` from the latest full workflow run, reordered to match the sheet, and writes `consolidated-results.md` with the rows that differ from the sheet and the conda name warnings. Requires `gh`. |
 | `my_contribs.py` | Writes `my-contribs.md`, a weekly summary of your Windows ARM64 PRs, with open PRs that conflict. Merged PRs that others have commented on after merging (your own comments are ignored) are listed there, with the comments written to `my-contribs-post-merge-comments.md` (`--comments-output`), PRs with the most recent comment first; that file is removed when there are none. Requires `gh`. |
 | `match_tracking_issue.py` | Writes `tracking-issue-report.md`, matching sheet rows under review that link your PRs (the authenticated `gh` user, or `--author`) against a tracking issue. Requires `gh`. |
 
@@ -141,6 +141,19 @@ current sheet, so it can still be pasted after the sheet has been re-sorted.
 Sheet packages missing from the TSV are left blank and TSV packages no longer in
 the sheet are dropped, with a warning for each. It also prints the output of the
 run's `consolidate_results.py` step, such as its warnings, from the job log.
+
+It also writes `consolidated-results.md` to the same directory, with:
+
+- A table of the reordered rows that differ from the sheet's columns of the same
+  name, showing the package, its sheet row number and every column with a
+  difference; differing cells are in bold. Dates are compared by value, as the
+  sheet shows them as `M/D/YYYY`, and `HYPERLINK` formulas by their label.
+  Columns not in the sheet are compared as blank. Not compared with
+  `--skip-reorder`.
+- The consolidate step's warning about packages that are not on conda under
+  their own name but have similarly named conda packages, linked to
+  anaconda.org. This warning is not printed.
+
 Options:
 
 - `--remove-older`: delete `win_arm64-status-<date>.tsv` files with an earlier

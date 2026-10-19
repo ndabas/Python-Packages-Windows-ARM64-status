@@ -140,6 +140,64 @@ class StepOutputTests(unittest.TestCase):
     def test_missing_step_is_none(self) -> None:
         self.assertIsNone(gcr.step_output(LOG.split("2026-10-16T07:35:11.5920892Z")[0]))
 
+    def test_conda_warning_is_split_out(self) -> None:
+        warning, rest = gcr.split_conda_warning(gcr.step_output(LOG) or [])
+        self.assertEqual(
+            warning,
+            ["Warning: 1 packages are not on conda under their own name:", "  foo: foo-bar"],
+        )
+        self.assertEqual(rest, ["", "Wrote data/win_arm64-status-20261014.tsv"])
+
+    def test_conda_section_links_similar_names(self) -> None:
+        lines = gcr.conda_section(["Warning: 1 packages are not on conda:", "  my_pkg: a, b"])
+        self.assertIn("1 packages are not on conda:", lines)
+        self.assertIn(
+            "- my\\_pkg: [a](<https://anaconda.org/anaconda/a>), "
+            "[b](<https://anaconda.org/anaconda/b>)",
+            lines,
+        )
+        self.assertIn("The consolidate step reported none.", gcr.conda_section([]))
+        self.assertIn("could not be fetched: boom", "\n".join(gcr.conda_section(None, "boom")))
+
+
+class DiffTests(unittest.TestCase):
+    def test_formulas_and_dates_compare_as_displayed(self) -> None:
+        self.assertEqual(gcr.comparable('=HYPERLINK("https://x/y","Yes")'), "Yes")
+        self.assertEqual(gcr.comparable("2026-07-07"), gcr.comparable("7/7/2026"))
+        self.assertEqual(gcr.comparable(" No "), "No")
+
+    def test_only_changed_rows_and_columns_are_shown(self) -> None:
+        rows = [
+            ["Package Name", "PR Opened", "Available on Conda", "py3.14_binary_url"],
+            ["a", "2026-07-07", '=HYPERLINK("https://anaconda.org/anaconda/a","Yes")', ""],
+            ["b", "", "No", "https://files.example/b-1.0-cp314-win_arm64.whl"],
+            ["c", "", "No", ""],
+        ]
+        sheet = [
+            {"Package Name": "a", "PR Opened": "7/7/2026", "Available on Conda": "Yes"},
+            {"Package Name": "b", "PR Opened": "", "Available on Conda": "Yes"},
+            {"Package Name": "c", "PR Opened": "1/2/2026", "Available on Conda": "No"},
+        ]
+        diff = gcr.compare_with_sheet("x.tsv", rows, sheet)
+        self.assertEqual(diff.missing_columns, ["py3.14_binary_url"])
+        self.assertEqual([(number, cells) for number, _, cells in diff.changed], [(3, {2, 3}), (4, {1})])
+        self.assertEqual(
+            gcr.diff_table(diff.header, diff.changed),
+            [
+                "| Row | Package Name | PR Opened | Available on Conda | py3.14\\_binary\\_url |",
+                "| ---: | --- | --- | --- | --- |",
+                "| 3 | b |  | **No** | **[b-1.0-cp314-win\\_arm64.whl](<https://files.example/b-1.0-cp314-win_arm64.whl>)** |",
+                "| 4 | c | **(blank)** | No |  |",
+            ],
+        )
+
+    def test_report_without_changes(self) -> None:
+        diff = gcr.TsvDiff("x.tsv", ["Package Name"], 3, [], [])
+        report = gcr.render_report(7, [diff], [], generated_at="now")
+        self.assertIn("Generated: now from workflow run 7", report)
+        self.assertIn("0 of 3 rows in `x.tsv` differ", report)
+        self.assertNotIn("| Row |", report)
+
 
 class MainTests(unittest.TestCase):
     def run_main(self, directory: str, *args: str) -> str:
@@ -162,7 +220,13 @@ class MainTests(unittest.TestCase):
                 fh.write("Package Name\tPotential Blockers\na\t\nb\ta\n")
             return subprocess.CompletedProcess(command, 0, "", "")
 
-        sheet = ([{"Package": "b"}, {"Package": "a"}], {"package": "Package"})
+        sheet = (
+            [
+                {"Package": "b", "Package Name": "b", "Potential Blockers": "x"},
+                {"Package": "a", "Package Name": "a", "Potential Blockers": ""},
+            ],
+            {"package": "Package"},
+        )
         with patch("sys.argv", ["gcr", "--output-dir", directory, *args]), patch.object(
             gcr, "require_gh"
         ), patch.object(gcr, "gh", return_value=artifacts), patch.object(
@@ -181,14 +245,28 @@ class MainTests(unittest.TestCase):
                     fh.write("old")
             out = self.run_main(directory, "--remove-older")
             self.assertIn("run 7", out)
-            self.assertIn("Output of consolidate_results.py in run 7:\n  Warning: 1 packages", out)
-            self.assertIn("  Wrote data/win_arm64-status-20261014.tsv\n", out)
+            self.assertIn("Output of consolidate_results.py in run 7:\n\n  Wrote data/", out)
+            self.assertNotIn("not on conda", out)
+            self.assertIn("(1 rows differ from the sheet, 1 packages with similarly named", out)
             self.assertEqual(
                 sorted(os.listdir(directory)),
-                ["other.tsv", "win_arm64-status-20261014.tsv", "win_arm64-status-20261231.tsv"],
+                ["consolidated-results.md", "other.tsv", "win_arm64-status-20261014.tsv",
+                 "win_arm64-status-20261231.tsv"],
             )
             with open(os.path.join(directory, "win_arm64-status-20261014.tsv"), encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "Package Name\tPotential Blockers\nb\ta\na\t\n")
+            with open(os.path.join(directory, "consolidated-results.md"), encoding="utf-8") as fh:
+                report = fh.read()
+            self.assertIn("1 of 2 rows in `win_arm64-status-20261014.tsv` differ", report)
+            self.assertIn("| 2 | b | **a** |", report)
+            self.assertIn("- foo: [foo-bar](<https://anaconda.org/anaconda/foo-bar>)", report)
+
+    def test_skip_reorder_still_writes_the_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            out = self.run_main(directory, "--skip-reorder")
+            self.assertIn("not compared with the sheet", out)
+            with open(os.path.join(directory, "consolidated-results.md"), encoding="utf-8") as fh:
+                self.assertIn("--skip-reorder", fh.read())
 
     def test_dry_run_changes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
